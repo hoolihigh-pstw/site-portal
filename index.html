@@ -114,15 +114,20 @@ code{font-family:var(--mono);font-size:13px;background:var(--bg);padding:1px 5px
 
 <!-- Firebase（compat 版，直接從 CDN 載入，不需安裝） -->
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
 
 <script>
 /* =====================================================================
-   ★ 只需要修改這一段 ★
-   1. FIREBASE_CONFIG：到 Firebase 主控台 → 專案設定 → 「您的應用程式」→ 網頁應用程式，
-      把畫面上 const firebaseConfig = { ... } 大括號裡的內容整段貼進來取代下面的範例。
-   2. SITE_PASS ：公司同仁開啟網站時要輸入的通關密碼（留空字串 "" 代表完全不用密碼）。
-   3. ADMIN_PASS：進入「管理」頁（發布公告、結案、刪除）要輸入的管理者密碼。
+   ★ 設定區 ★
+   FIREBASE_CONFIG：到 Firebase 主控台 → 專案設定 → 「您的應用程式」→ 網頁應用程式，
+   把畫面上 const firebaseConfig = { ... } 大括號裡的內容整段貼進來。
+
+   帳號：每個據點一個帳號，管理者一個帳號（Firebase Authentication）。
+   帳號名稱固定為「據點代碼小寫@authDomain」，例如 sc0@site-portal-8153a.firebaseapp.com，
+   管理者為 admin@site-portal-8153a.firebaseapp.com。同仁登入時只要選據點、輸入密碼即可。
+   權限由 Firestore 規則把關：據點只能新增／修改「自己站別」的回覆與附件，
+   公告的新增、修改、刪除與所有刪除動作只有管理者可以做。
    ===================================================================== */
 const FIREBASE_CONFIG = {
   apiKey: "AIzaSyCfCZNWeh6KUCNBejOeb7GwPeaQzyk5yUQ",
@@ -132,8 +137,8 @@ const FIREBASE_CONFIG = {
   messagingSenderId: "757047720502",
   appId: "1:757047720502:web:95ca0a121c573839667697"
 };
-const SITE_PASS  = "pstw";        // 公司通關密碼（可自行更改）
-const ADMIN_PASS = "admin168";    // 管理者密碼（請務必更改）
+const ACCOUNT_DOMAIN = FIREBASE_CONFIG.authDomain;   // 帳號網域（不必改）
+const ADMIN_CODE = "ADMIN";
 /* ===================================================================== */
 
 /* ---------- 據點資料 ---------- */
@@ -156,19 +161,21 @@ const SECTIONS = [
 ];
 const siteByCode = Object.fromEntries(SITES.map(s=>[s.code,s]));
 const showCode = s => s.group==="服務站";
+const emailOf = code => code.toLowerCase()+"@"+ACCOUNT_DOMAIN;
+const codeOf = email => { const m=String(email||"").toLowerCase().match(/^([a-z0-9]+)@(.+)$/); if(!m||m[2]!==ACCOUNT_DOMAIN.toLowerCase()) return null; const c=m[1].toUpperCase(); return (c===ADMIN_CODE||siteByCode[c])?c:null; };
+const siteLabel = s => s ? (showCode(s)?`${s.code} ${s.name}`:s.name) : "";
 
 /* ---------- 狀態 ---------- */
 const S = {
   view:"home", projectId:null, site:null,
-  db:null, canEdit:false, unlocked:false, fileCache:{},
+  db:null, auth:null, user:null, me:null, authReady:false, unsub:[],
+  canEdit:false, fileCache:{},
   projects:[], replies:{}, loaded:false, loadErr:null,
-  draft:{}, uploading:false, editingProject:null,
+  draft:{}, uploading:false, editingProject:null, acct:null,
   store:null, clearing:null, orphanJob:null, orphConfirm:false, focusSite:null, zipping:null, filter:"all"
 };
 const LS = { get:k=>{try{return localStorage.getItem(k);}catch(e){return null;}}, set:(k,v)=>{try{localStorage.setItem(k,v);}catch(e){}}, del:k=>{try{localStorage.removeItem(k);}catch(e){}} };
-S.site = LS.get("site") || null;
-S.unlocked = !SITE_PASS || LS.get("pass")===SITE_PASS;
-S.canEdit = LS.get("admin")===ADMIN_PASS;
+["pass","admin"].forEach(k=>LS.del(k));   // 舊版通關密碼紀錄，已不使用
 try{ const v=location.hash.replace("#",""); if(["home","dash","admin"].includes(v)) S.view=v; }catch(e){}
 
 const app = document.getElementById("app");
@@ -200,52 +207,84 @@ function replyFilesHTML(r){
 /* ---------- 導覽 ---------- */
 document.querySelectorAll(".tab").forEach(b=>b.addEventListener("click",()=>{ S.view=b.dataset.view; S.projectId=null; try{location.hash=S.view;}catch(e){} render(); }));
 window.addEventListener("hashchange",()=>{ const v=location.hash.replace("#",""); if(["home","dash","admin"].includes(v)&&v!==S.view){S.view=v;S.projectId=null;render();} });
-document.getElementById("siteChip").addEventListener("click",()=>{ S.view="pick"; render(); });
+document.getElementById("siteChip").addEventListener("click",()=>{ if(!S.user) return; S.view="account"; S.projectId=null; render(); });
 
 /* ---------- 渲染 ---------- */
 function render(){
+  const adminTab=document.querySelector('.tab[data-view="admin"]'); if(adminTab) adminTab.hidden=!S.canEdit;
+  if(S.view==="admin" && S.user && !S.canEdit) S.view="home";
   document.querySelectorAll(".tab").forEach(b=>b.setAttribute("aria-selected", String(b.dataset.view===S.view)));
   const chip=document.getElementById("siteChip");
-  chip.textContent = S.site ? (siteByCode[S.site]?.name || S.site) : "選擇據點";
-  if(S.loadErr){ app.innerHTML=`<div class="card"><div class="title">目前無法連線到資料</div><div class="meta" style="margin-top:4px">${S.loadErr}</div></div>`; return; }
-  if(!S.unlocked) return renderGate();
-  if(!S.site && S.view!=="pick" && S.view!=="admin"){ renderPick(true); return; }
-  if(S.view==="pick") return renderPick(false);
+  chip.hidden = !S.user;
+  chip.textContent = S.canEdit ? (S.site?`管理者・代${siteByCode[S.site]?.name||S.site}`:"管理者") : (siteByCode[S.site]?.name || "");
+  if(S.loadErr){ app.innerHTML=`<div class="card"><div class="title">目前無法連線到資料</div><div class="meta" style="margin-top:4px">${S.loadErr}</div>${S.user?`<div class="row" style="margin-top:10px"><button type="button" class="btn sm" id="errOut">登出</button></div>`:""}</div>`; document.getElementById("errOut")?.addEventListener("click",logout); return; }
+  if(!S.authReady){ app.innerHTML=`<div class="empty">載入中…</div>`; return; }
+  if(!S.user) return renderLogin();
+  if(S.view==="account") return renderAccount();
+  if(S.view==="pick") return S.canEdit ? renderPick(false) : renderAccount();
+  if(S.canEdit && !S.site && S.view!=="admin" && S.view!=="dash"){ renderPick(true); return; }
   if(!S.loaded){ app.innerHTML=`<div class="empty">載入中…</div>`; return; }
   if(S.view==="home") return S.projectId ? renderProject() : renderHome();
   if(S.view==="dash") return S.projectId ? renderDashProject() : renderDash();
-  if(S.view==="admin") return S.canEdit ? renderAdmin() : renderAdminGate();
+  if(S.view==="admin") return renderAdmin();
 }
 
-function renderGate(){
-  app.innerHTML=`<div class="card form"><div class="title">請輸入公司通關密碼</div>
-    <div class="meta">本網站供公司內部據點使用。密碼請向管理者索取，輸入一次後此裝置會記住。</div>
-    <div class="field"><input type="password" id="gatePass" placeholder="通關密碼" autocomplete="off"></div>
-    <button type="button" class="btn primary" id="gateGo">進入</button></div>`;
-  const inp=document.getElementById("gatePass");
-  const go=()=>{ if(inp.value===SITE_PASS){ LS.set("pass",inp.value); S.unlocked=true; render(); } else toastEl("密碼不正確"); };
-  document.getElementById("gateGo").addEventListener("click",go);
-  inp.addEventListener("keydown",e=>{ if(e.key==="Enter") go(); });
-  inp.focus();
+/* ---------- 登入 ---------- */
+function authMsg(e){
+  const c=e?.code||"";
+  if(/invalid-credential|wrong-password|user-not-found|invalid-login|invalid-email/.test(c)) return "據點或密碼不正確";
+  if(/too-many-requests/.test(c)) return "嘗試次數太多，請稍候幾分鐘再試";
+  if(/operation-not-allowed/.test(c)) return "系統尚未啟用帳號登入，請通知管理者（Firebase → Authentication → 啟用「電子郵件/密碼」）";
+  if(/user-disabled/.test(c)) return "此帳號已被停用，請洽管理者";
+  if(/network/.test(c)) return "網路連線有問題，請檢查後再試";
+  return "登入失敗（"+c+"）";
 }
-function renderAdminGate(){
-  app.innerHTML=`<div class="card form"><div class="title">管理者登入</div>
-    <div class="meta">發布公告、結案、刪除專案需要管理者密碼。</div>
-    <div class="field"><input type="password" id="adminPass" placeholder="管理者密碼" autocomplete="off"></div>
-    <button type="button" class="btn primary" id="adminGo">進入管理</button></div>`;
-  const inp=document.getElementById("adminPass");
-  const go=()=>{ if(inp.value===ADMIN_PASS){ LS.set("admin",inp.value); S.canEdit=true; render(); } else toastEl("密碼不正確"); };
-  document.getElementById("adminGo").addEventListener("click",go);
+function renderLogin(){
+  const last=LS.get("loginSite")||"";
+  const opts = SECTIONS.map(sec=>`<optgroup label="${esc(sec.label)}">${sec.list.map(s=>`<option value="${s.code}" ${s.code===last?"selected":""}>${esc(siteLabel(s))}</option>`).join("")}</optgroup>`).join("")
+    + `<optgroup label="其他"><option value="${ADMIN_CODE}" ${last===ADMIN_CODE?"selected":""}>管理者</option></optgroup>`;
+  app.innerHTML=`<div class="card form"><div class="title">登入</div>
+    <div class="meta">請選擇您的據點並輸入該據點的密碼。登入後只能回覆自己據點的資料；此裝置會保持登入，直到按「登出」。</div>
+    <div class="field"><label for="loginSite">據點</label><select id="loginSite"><option value="" ${last?"":"selected"} disabled>請選擇據點</option>${opts}</select></div>
+    <div class="field"><label for="loginPass">密碼</label><input type="password" id="loginPass" placeholder="據點密碼" autocomplete="current-password"></div>
+    <button type="button" class="btn primary" id="loginGo">登入</button>
+    <div class="meta">忘記密碼請洽管理者重新設定。</div></div>`;
+  const sel=document.getElementById("loginSite"), inp=document.getElementById("loginPass"), btn=document.getElementById("loginGo");
+  const go=async()=>{
+    if(!sel.value){ toastEl("請先選擇據點"); return; }
+    if(!inp.value){ toastEl("請輸入密碼"); return; }
+    btn.disabled=true; btn.textContent="登入中…";
+    try{ LS.set("loginSite",sel.value); await S.auth.signInWithEmailAndPassword(emailOf(sel.value), inp.value); }
+    catch(e){ toastEl(authMsg(e)); btn.disabled=false; btn.textContent="登入"; }
+  };
+  btn.addEventListener("click",go);
   inp.addEventListener("keydown",e=>{ if(e.key==="Enter") go(); });
-  inp.focus();
+  (sel.value?inp:sel).focus();
+}
+async function logout(){
+  S.unsub.forEach(f=>{try{f();}catch(e){}}); S.unsub=[];
+  try{ await S.auth.signOut(); }catch(e){}
+}
+function renderAccount(){
+  const s=siteByCode[S.site];
+  app.innerHTML=`<div class="card form">
+    <div class="title">${S.canEdit?"管理者帳號":esc(siteLabel(s))}</div>
+    <div class="meta">${S.canEdit
+      ? (s?`目前代 <b>${esc(siteLabel(s))}</b> 檢視與回覆。管理者可代任何據點回覆。`:"尚未選擇代理的據點。")
+      : "您目前以此據點登入，只能新增或修改本據點的回覆。若要回覆其他據點，請登出後用該據點的帳號登入。"}</div>
+    <div class="row">${S.canEdit?`<button type="button" class="btn" id="accPick">切換代理據點</button>`:""}<button type="button" class="btn danger" id="accOut">登出</button><button type="button" class="btn" id="accBack">返回</button></div>
+  </div>`;
+  document.getElementById("accPick")?.addEventListener("click",()=>{ S.view="pick"; render(); });
+  document.getElementById("accOut").addEventListener("click",logout);
+  document.getElementById("accBack").addEventListener("click",()=>{ S.view="home"; render(); });
 }
 
 function renderPick(first){
   const groups = SECTIONS.map(sec=>`
     <div class="section-h">${sec.label}</div>
     <div class="site-list">${sec.list.map(s=>`<button type="button" class="site-btn" data-code="${s.code}" aria-pressed="${s.code===S.site}">${showCode(s)?`<b>${s.code}</b>`:""}${esc(s.name)}</button>`).join("")}</div>`).join("");
-  app.innerHTML=`<div class="card"><div class="title">${first?"請先選擇您的據點":"切換據點"}</div><div class="meta">選定後，公告回覆會以此據點名義送出。之後可從右上角切換。</div></div>${groups}`;
-  app.querySelectorAll(".site-btn").forEach(b=>b.addEventListener("click",()=>{ S.site=b.dataset.code; LS.set("site",S.site); S.view="home"; S.projectId=null; render(); }));
+  app.innerHTML=`<div class="card"><div class="title">${first?"請選擇要代理的據點":"切換代理據點"}</div><div class="meta">管理者可代任何據點檢視與回覆。一般據點帳號看不到這個畫面，只能回覆自己據點。</div></div>${groups}`;
+  app.querySelectorAll(".site-btn").forEach(b=>b.addEventListener("click",()=>{ S.site=b.dataset.code; LS.set("adminSite",S.site); S.view="home"; S.projectId=null; render(); }));
 }
 
 function projectCardHTML(p, opts={}){
@@ -382,7 +421,7 @@ async function uploadFile(f0,onProgress){
   const buf=new Uint8Array(await f.arrayBuffer()), n=Math.ceil(buf.length/CHUNK)||1;
   const id = `${Date.now().toString(36)}${Math.random().toString(36).slice(2,8)}`;
   const doc=S.db.collection("files").doc(id);
-  await doc.set({name:f0.name,type,size:buf.length,chunks:n,createdAt:new Date().toISOString()});
+  await doc.set({name:f0.name,type,size:buf.length,chunks:n,owner:S.me,createdAt:new Date().toISOString()});
   for(let i=0;i<n;i++){
     await doc.collection("chunks").doc(String(i)).set({data:firebase.firestore.Blob.fromUint8Array(buf.subarray(i*CHUNK,(i+1)*CHUNK))});
     if(onProgress) onProgress((i+1)/n);
@@ -418,7 +457,7 @@ async function submitReply(p,d,key){
   try{
     await S.db.collection("replies").doc(key).set({projectId:p.id,site:S.site,text:d.text.trim(),files:d.files,updatedAt:new Date().toISOString()});
     toastEl("已送出"); delete S.draft[key];
-  }catch(e){ toastEl("送出失敗，請再試一次"); btn.disabled=false; }
+  }catch(e){ toastEl(e?.code==="permission-denied"?"沒有權限：只能回覆自己據點，且專案需在進行中":"送出失敗，請再試一次"); btn.disabled=false; }
 }
 
 function passFilter(pid,s){ const r=!!S.replies[replyKey(pid,s.code)]; return S.view!=="dash" || S.filter==="all" || (S.filter==="pending"?!r:r); }
@@ -520,7 +559,7 @@ async function downloadProjectZip(p){
 function renderAdmin(){
   const e=S.editingProject;
   const form = `<div class="card form">
-    <div class="row"><div class="grow title">${e&&e.id?"編輯公告":"新增公告"}</div><button type="button" class="btn sm" id="adminOut">登出管理</button></div>
+    <div class="row"><div class="grow title">${e&&e.id?"編輯公告":"新增公告"}</div></div>
     <div class="field"><label for="pTitle">專案名稱</label><input type="text" id="pTitle" placeholder="例：全省消防檢修資料確認" value="${esc(e?.title||"")}"></div>
     <div class="field"><label for="pBody">公告內容</label><textarea id="pBody" placeholder="說明要各據點確認或回覆的事項">${esc(e?.body||"")}</textarea></div>
     <div class="field"><label for="pDeadline">回覆期限（可留空）</label><input type="date" id="pDeadline" value="${esc(e?.deadline||"")}"></div>
@@ -539,9 +578,8 @@ function renderAdmin(){
     ${canClear&&!busy?`<div id="clrc-${p.id}" hidden class="notice" style="margin-top:8px">將永久刪除此專案的 ${st.count} 個附件（${fmtSize(st.bytes)}），包含公告附件與各據點回覆的照片、PDF；文字回覆會保留。<span class="overdue">刪除後無法復原。</span><div class="row" style="margin-top:8px"><button type="button" class="btn sm danger" data-clear-yes="${p.id}">確定清除</button><button type="button" class="btn sm" data-clear-no="${p.id}">取消</button></div></div>`:""}
     <div id="confirm-${p.id}" hidden class="notice" style="margin-top:8px">確定要刪除此專案、所有回覆及附件？ <button type="button" class="btn sm danger" data-del-yes="${p.id}">確定刪除</button></div></div>`;
   }).join("");
-  app.innerHTML = form + `<div class="card" id="storageBox">${storageInner()}</div>` + `<div class="section-h">所有專案</div>` + (list||`<div class="card empty">尚無專案</div>`);
-  bindStorage();
-  document.getElementById("adminOut").addEventListener("click",()=>{ LS.del("admin"); S.canEdit=false; S.editingProject=null; S.view="home"; render(); });
+  app.innerHTML = form + `<div class="card" id="acctBox">${acctInner()}</div>` + `<div class="card" id="storageBox">${storageInner()}</div>` + `<div class="section-h">所有專案</div>` + (list||`<div class="card empty">尚無專案</div>`);
+  bindStorage(); bindAcct();
   const d = S.editingProject || (S.editingProject={files:[]}); d.files=d.files||[];
   const fi=document.getElementById("pFileInput");
   document.getElementById("pAddFile").addEventListener("click",()=>fi.click());
@@ -575,6 +613,65 @@ function renderAdmin(){
   app.querySelectorAll("[data-clear-no]").forEach(b=>b.addEventListener("click",()=>{ const el=document.getElementById("clrc-"+b.dataset.clearNo); if(el) el.hidden=true; }));
   app.querySelectorAll("[data-clear-yes]").forEach(b=>b.addEventListener("click",()=>{ b.disabled=true; clearProjectFiles(b.dataset.clearYes); }));
   if(!S.store || (!S.store.loading && Date.now()-(S.store.at||0)>60000)) loadStorage();
+}
+
+/* ---------- 據點帳號（建立尚未建立的帳號，密碼只顯示一次） ---------- */
+function genPass(){
+  const cs="abcdefghjkmnpqrstuvwxyz23456789", a=new Uint32Array(8);
+  crypto.getRandomValues(a); return Array.from(a,x=>cs[x%cs.length]).join("");
+}
+function acctInner(){
+  const A=S.acct;
+  const head=`<div class="section-h">據點帳號</div>
+    <div class="meta" style="margin-top:4px">每個據點一個帳號（共 ${SITES.length} 個），登入後只能新增、修改自己據點的回覆。按下方按鈕會替「還沒有帳號」的據點建立帳號並產生密碼，已有帳號的據點不會被更動。</div>`;
+  if(!A) return head+`<div class="row" style="margin-top:10px"><button type="button" class="btn sm" id="acctGo">建立尚未建立的據點帳號</button></div>
+    <div class="meta" style="margin-top:6px">要重設某據點密碼：到 Firebase 主控台 → Authentication → 使用者，刪除該據點帳號，再回來按這個按鈕，就會只替它產生新密碼。</div>`;
+  if(A.running) return head+`<div class="notice" style="margin-top:10px">建立中 ${A.done}/${SITES.length}…請勿關閉此頁</div>`;
+  const made=A.list.filter(x=>x.st==="new"), had=A.list.filter(x=>x.st==="exists"), bad=A.list.filter(x=>x.st==="fail");
+  return head+`
+    <div class="meta" style="margin-top:8px">本次新建 ${made.length} 個 · 原本已存在 ${had.length} 個${bad.length?` · <span class="overdue">失敗 ${bad.length} 個</span>`:""}</div>
+    ${A.err?`<div class="overdue" style="margin-top:6px">${esc(A.err)}</div>`:""}
+    ${made.length?`<div class="notice" style="margin-top:8px"><b>密碼只會顯示這一次</b>，重新整理或離開此頁就看不到了，請先下載清單再分別通知各據點。
+      <div class="row" style="margin-top:8px"><button type="button" class="btn sm" id="acctCsv">下載帳號密碼清單（CSV）</button><button type="button" class="btn sm" id="acctCopy">複製清單</button></div></div>
+      <div style="margin-top:8px;font-size:13px">${made.map(x=>`<div class="row" style="gap:6px;padding:3px 0;border-top:1px solid var(--line)"><span class="grow">${esc(siteLabel(x.s))}</span><code>${esc(x.pw)}</code></div>`).join("")}</div>`:""}
+    ${bad.length?`<div class="meta" style="margin-top:8px">失敗：${bad.map(x=>esc(x.s.name)+"（"+esc(x.err)+"）").join("、")}</div>`:""}
+    <div class="row" style="margin-top:10px"><button type="button" class="btn sm" id="acctDone">${made.length?"我已下載，關閉清單":"關閉"}</button></div>`;
+}
+window.addEventListener("beforeunload",e=>{ if(S.acct && (S.acct.running || S.acct.list.some(x=>x.st==="new"))){ e.preventDefault(); e.returnValue=""; } });
+function renderAcct(){ const box=document.getElementById("acctBox"); if(box){ box.innerHTML=acctInner(); bindAcct(); } }
+function acctListText(sep){
+  return (S.acct?.list||[]).filter(x=>x.st==="new").map(x=>[x.s.code,x.s.name,x.pw].join(sep)).join("\r\n");
+}
+function bindAcct(){
+  document.getElementById("acctGo")?.addEventListener("click",createSiteAccounts);
+  document.getElementById("acctDone")?.addEventListener("click",()=>{ S.acct=null; renderAcct(); });
+  document.getElementById("acctCopy")?.addEventListener("click",async()=>{ try{ await navigator.clipboard.writeText("據點代碼\t據點\t密碼\r\n"+acctListText("\t")); toastEl("已複製"); }catch(e){ toastEl("無法複製，請改用下載"); } });
+  document.getElementById("acctCsv")?.addEventListener("click",()=>{
+    const csv="﻿據點代碼,據點,密碼\r\n"+acctListText(",");
+    const a=document.createElement("a"); a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"})); a.download=`據點帳號密碼_${today()}.csv`;
+    document.body.appendChild(a); a.click(); setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},4000);
+  });
+}
+async function createSiteAccounts(){
+  if(S.acct?.running) return;
+  S.acct={running:true,done:0,list:[],err:null}; renderAcct();
+  // 用第二個 Firebase 連線建立帳號，管理者本身不會被登出
+  const app2 = firebase.apps.find(a=>a.name==="acct-maker") || firebase.initializeApp(FIREBASE_CONFIG,"acct-maker");
+  const a2 = app2.auth();
+  try{ await a2.setPersistence(firebase.auth.Auth.Persistence.NONE); }catch(e){}
+  for(const s of SITES){
+    const pw=genPass();
+    try{ await a2.createUserWithEmailAndPassword(emailOf(s.code),pw); S.acct.list.push({s,pw,st:"new"}); try{ await a2.signOut(); }catch(e){} }
+    catch(e){
+      if(e?.code==="auth/email-already-in-use") S.acct.list.push({s,st:"exists"});
+      else { S.acct.list.push({s,st:"fail",err:e?.code||"錯誤"});
+        if(/operation-not-allowed|admin-restricted/.test(e?.code||"")){ S.acct.err="Firebase 目前不允許建立帳號：請到 Authentication → Sign-in method 啟用「電子郵件/密碼」，並確認「設定 → 使用者動作」允許建立帳號，再按一次。"; break; }
+        if(/too-many-requests/.test(e?.code||"")){ S.acct.err="建立太頻繁被暫時阻擋，請過 1 小時再按一次（已建立的不會重複）。"; break; }
+      }
+    }
+    S.acct.done++; const box=document.getElementById("acctBox"); if(box&&S.acct.running){ const n=box.querySelector(".notice"); if(n) n.textContent=`建立中 ${S.acct.done}/${SITES.length}…請勿關閉此頁`; }
+  }
+  S.acct.running=false; renderAcct();
 }
 
 /* ---------- 儲存空間（Firestore 免費額度 1 GB） ---------- */
@@ -655,15 +752,30 @@ render();
   if(!FIREBASE_CONFIG.apiKey || FIREBASE_CONFIG.apiKey==="請貼上"){
     S.loadErr=`尚未設定 Firebase。請打開 <code>index.html</code>，把 Firebase 主控台提供的 <code>firebaseConfig</code> 貼到檔案開頭的 <code>FIREBASE_CONFIG</code>。`; render(); return;
   }
-  try{ firebase.initializeApp(FIREBASE_CONFIG); S.db=firebase.firestore(); }
+  try{ firebase.initializeApp(FIREBASE_CONFIG); S.db=firebase.firestore(); S.auth=firebase.auth(); }
   catch(e){ S.loadErr="Firebase 設定有誤："+esc(e.message); render(); return; }
+  S.auth.onAuthStateChanged(user=>{
+    S.unsub.forEach(f=>{try{f();}catch(e){}}); S.unsub=[];
+    Object.assign(S,{projects:[],replies:{},loaded:false,loadErr:null,draft:{},editingProject:null,store:null,acct:null,projectId:null,focusSite:null,filter:"all"});
+    const code = user ? codeOf(user.email) : null;
+    if(user && !code){ toastEl("這個帳號不是據點帳號，已登出"); S.auth.signOut(); return; }
+    S.user=user||null; S.me=code; S.canEdit=(code===ADMIN_CODE);
+    S.site = !code ? null : S.canEdit ? (LS.get("adminSite")||null) : code;
+    if(S.view==="account"||S.view==="pick") S.view="home";
+    S.authReady=true;
+    if(user) subscribe(); else render();
+  });
+})();
+function subscribe(){
   let gotP=false, gotR=false;
   const timer=setTimeout(()=>{ if(!(gotP&&gotR)){ S.loadErr="資料讀取逾時，請檢查網路後重新整理。若是第一次設定，請確認 Firestore 資料庫已建立且規則已發布。"; render(); } },15000);
   const done=()=>{ if(gotP&&gotR){ clearTimeout(timer); S.loaded=true; S.loadErr=null; } render(); };
   const fail=(what)=>e=>{ clearTimeout(timer); S.loadErr=`無法讀取${what}（${esc(e.code||e.message)}）。${e.code==="permission-denied"?"請到 Firebase 主控台 → Firestore Database → 規則，貼上附的 firestore.rules 並發布。":""}`; render(); };
-  S.db.collection("projects").onSnapshot(snap=>{ S.projects=snap.docs.map(x=>({id:x.id,...x.data()})); gotP=true; done(); }, fail("專案資料"));
-  S.db.collection("replies").onSnapshot(snap=>{ S.replies={}; snap.docs.forEach(x=>{S.replies[x.id]=x.data();}); gotR=true; done(); }, fail("回覆資料"));
-})();
+  S.unsub.push(S.db.collection("projects").onSnapshot(snap=>{ S.projects=snap.docs.map(x=>({id:x.id,...x.data()})); gotP=true; done(); }, fail("專案資料")));
+  S.unsub.push(S.db.collection("replies").onSnapshot(snap=>{ S.replies={}; snap.docs.forEach(x=>{S.replies[x.id]=x.data();}); gotR=true; done(); }, fail("回覆資料")));
+  S.unsub.push(()=>clearTimeout(timer));
+  render();
+}
 </script>
 </body>
 </html>
