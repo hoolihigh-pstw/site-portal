@@ -1,0 +1,588 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>外據點聯絡系統</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&display=swap">
+<style>
+:root{
+  --bg:#f5f6f8; --surface:#ffffff; --fg:#1c2230; --muted:#5f6878; --line:#dde1e8;
+  --accent:#1f4e8c; --accent-fg:#ffffff; --accent-soft:#e6eef9;
+  --ok:#1f7a4d; --ok-soft:#e3f3ea; --warn:#b4231f; --warn-soft:#fbe7e6; --pending:#8a92a3;
+  --font:"Noto Sans TC",-apple-system,"PingFang TC","Microsoft JhengHei",sans-serif;
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#141821; --surface:#1d222d; --fg:#e8ebf1; --muted:#9aa3b5; --line:#303746;
+  --accent:#7aa6e6; --accent-fg:#0f1420; --accent-soft:#223149;
+  --ok:#6cc595; --ok-soft:#1d3328; --warn:#f08a86; --warn-soft:#3d2224; --pending:#6c7484; color-scheme:dark}}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--font);font-size:15px;line-height:1.55}
+button,input,textarea,select{font:inherit;color:inherit}
+h1,h2,h3{margin:0;line-height:1.3}
+a{color:var(--accent)}
+.topbar{position:sticky;top:0;z-index:9;background:var(--surface);border-bottom:1px solid var(--line);
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-top:env(safe-area-inset-top,0px)}
+.topbar-in{max-width:760px;margin:0 auto;display:flex;align-items:center;gap:10px;padding-block:10px 0}
+.brand{font-weight:700;font-size:16px;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.site-chip{border:1px solid var(--line);background:var(--accent-soft);color:var(--accent);border-radius:999px;padding:4px 12px;font-weight:500;cursor:pointer;white-space:nowrap}
+.tabs{max-width:760px;margin:0 auto;display:flex}
+.tab{flex:1;background:none;border:0;border-bottom:3px solid transparent;padding:10px 4px;color:var(--muted);font-weight:500;cursor:pointer}
+.tab[aria-selected="true"]{color:var(--accent);border-bottom-color:var(--accent)}
+main{max-width:760px;margin:0 auto;padding-block:16px 48px;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+.view{display:flex;flex-direction:column;gap:14px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+.card.clickable{cursor:pointer}
+.card.clickable:active{background:var(--accent-soft)}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.grow{flex:1;min-width:0}
+.title{font-weight:700;font-size:16px}
+.meta{color:var(--muted);font-size:13px}
+.pill{display:inline-block;border-radius:999px;padding:2px 10px;font-size:12px;font-weight:500;white-space:nowrap}
+.pill.ok{background:var(--ok-soft);color:var(--ok)}
+.pill.no{background:var(--line);color:var(--muted)}
+.pill.closed{background:var(--line);color:var(--muted)}
+.btn{border:1px solid var(--line);background:var(--surface);border-radius:8px;padding:10px 16px;font-weight:500;cursor:pointer;min-height:44px}
+.btn.primary{background:var(--accent);color:var(--accent-fg);border-color:var(--accent)}
+.btn.danger{color:var(--warn);border-color:var(--warn)}
+.btn:disabled{opacity:.5;cursor:default}
+.btn.sm{min-height:36px;padding:6px 12px;font-size:14px}
+.field{display:flex;flex-direction:column;gap:6px}
+.field label{font-size:13px;color:var(--muted);font-weight:500}
+input[type=text],input[type=password],input[type=date],textarea,select{width:100%;border:1px solid var(--line);background:var(--bg);border-radius:8px;padding:10px 12px;min-height:44px}
+textarea{min-height:110px;resize:vertical}
+.form{display:flex;flex-direction:column;gap:12px}
+.body-text{white-space:pre-wrap;word-break:break-word}
+.bar{height:8px;border-radius:4px;background:var(--line);overflow:hidden}
+.bar>i{display:block;height:100%;background:var(--ok)}
+.bar.meter>i{background:var(--accent)}
+.bar.meter.hi>i{background:var(--warn)}
+.usage-line{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px;margin-top:6px}
+.big{font-size:28px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.1}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:6px}
+.cell{border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:13px;display:flex;flex-direction:column;gap:2px;min-width:0}
+.cell.ok{background:var(--ok-soft);border-color:transparent}
+.cell .code{font-family:var(--mono);font-size:11px;color:var(--muted)}
+.cell .nm{font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cell .st{font-size:11px;color:var(--muted)}
+.cell.ok .st{color:var(--ok)}
+.group-h{font-size:13px;color:var(--muted);font-weight:500;margin-top:6px;display:flex;justify-content:space-between}
+.files{display:flex;flex-wrap:wrap;gap:8px}
+.file{border:1px solid var(--line);border-radius:8px;overflow:hidden;width:96px;position:relative;background:var(--bg)}
+.file img{display:block;width:96px;height:96px;object-fit:cover}
+.file .pdf{width:96px;height:96px;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-weight:700;color:var(--warn)}
+.file .fn{font-size:11px;padding:4px 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--muted)}
+.file .rm{position:absolute;top:4px;right:4px;background:var(--surface);border:1px solid var(--line);border-radius:999px;width:24px;height:24px;cursor:pointer;line-height:1;font-size:14px}
+.file a{display:block;color:inherit;text-decoration:none}
+.site-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:8px}
+.site-btn{border:1px solid var(--line);background:var(--surface);border-radius:8px;padding:10px;min-height:48px;cursor:pointer;text-align:left}
+.site-btn b{display:block;font-size:12px;color:var(--muted);font-family:var(--mono);font-weight:400}
+.site-btn[aria-pressed="true"]{border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}
+.section-h{font-size:13px;color:var(--muted);font-weight:500;letter-spacing:.04em}
+.empty{color:var(--muted);text-align:center;padding:24px 8px}
+.toast{position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--fg);color:var(--bg);padding:10px 16px;border-radius:8px;font-size:14px;z-index:20;max-width:90vw}
+.back{background:none;border:0;color:var(--accent);padding:0;cursor:pointer;font-weight:500}
+.notice{background:var(--accent-soft);color:var(--accent);border-radius:8px;padding:10px 12px;font-size:13px}
+.overdue{color:var(--warn);font-weight:500}
+.reply-list{display:flex;flex-direction:column;gap:8px}
+.reply-item{border-top:1px solid var(--line);padding-top:10px}
+code{font-family:var(--mono);font-size:13px;background:var(--bg);padding:1px 5px;border-radius:4px}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-in">
+    <div class="brand">外據點聯絡系統</div>
+    <button class="site-chip" id="siteChip" type="button">選擇據點</button>
+  </div>
+  <div class="tabs" role="tablist">
+    <button class="tab" role="tab" aria-selected="true" data-view="home" type="button">公告</button>
+    <button class="tab" role="tab" aria-selected="false" data-view="dash" type="button">儀表板</button>
+    <button class="tab" role="tab" aria-selected="false" data-view="admin" type="button">管理</button>
+  </div>
+</header>
+
+<main>
+  <div id="app" class="view"><div class="empty">載入中…</div></div>
+</main>
+
+<!-- Firebase（compat 版，直接從 CDN 載入，不需安裝） -->
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
+
+<script>
+/* =====================================================================
+   ★ 只需要修改這一段 ★
+   1. FIREBASE_CONFIG：到 Firebase 主控台 → 專案設定 → 「您的應用程式」→ 網頁應用程式，
+      把畫面上 const firebaseConfig = { ... } 大括號裡的內容整段貼進來取代下面的範例。
+   2. SITE_PASS ：公司同仁開啟網站時要輸入的通關密碼（留空字串 "" 代表完全不用密碼）。
+   3. ADMIN_PASS：進入「管理」頁（發布公告、結案、刪除）要輸入的管理者密碼。
+   ===================================================================== */
+const firebaseConfig = {
+  apiKey: "AIzaSyCfCZNWeh6KUCNBejOeb7GwPeaQzyk5yUQ",
+  authDomain: "site-portal-8153a.firebaseapp.com",
+  projectId: "site-portal-8153a",
+  storageBucket: "site-portal-8153a.firebasestorage.app",
+  messagingSenderId: "757047720502",
+  appId: "1:757047720502:web:95ca0a121c573839667697"
+};
+const SITE_PASS  = "pstw";        // 公司通關密碼（可自行更改）
+const ADMIN_PASS = "admin168";    // 管理者密碼（請務必更改）
+/* ===================================================================== */
+
+/* ---------- 據點資料 ---------- */
+const SITES = [
+  ...[["SC0","基隆"],["SC3","東區"],["SC4","北區"],["SC8","三重"],["SC1","宜蘭"],["SC2","花蓮"],["SC5","西區"],["SC7","中和"],["SC6","金門"],
+     ["SD0","桃園"],["SD8","中壢"],["SD1","新竹"],["SD2","苗栗"],["SD3","台中"],["SD4","清水"],["SD5","豐原"],["SD6","彰化"],["SD7","草屯"],
+     ["SE0","嘉義"],["SE1","虎尾"],["SE2","新營"],["SE3","台南"],["SE4","高北"],["SE5","高南"],["SE6","岡山"],["SE7","澎湖"],["SE8","屏東"],["SE9","台東"]]
+     .map(([c,n])=>({code:c,name:n,group:"服務站"})),
+  {code:"F01",name:"五股廠",group:"工廠"},{code:"F02",name:"中和廠",group:"工廠"},
+  ...["宜蘭","花蓮","桃園","竹苗","台中","彰投","雲嘉","台南","高雄","屏東","台東"]
+     .map((n,i)=>({code:"B"+String(i+1).padStart(2,"0"),name:n+"營業",group:"營業所"}))
+];
+const GROUPS = ["服務站","營業所","工廠"];
+const siteByCode = Object.fromEntries(SITES.map(s=>[s.code,s]));
+const showCode = s => s.group==="服務站";
+
+/* ---------- 狀態 ---------- */
+const S = {
+  view:"home", projectId:null, site:null,
+  db:null, canEdit:false, unlocked:false, fileCache:{},
+  projects:[], replies:{}, loaded:false, loadErr:null,
+  draft:{}, uploading:false, editingProject:null,
+  store:null, clearing:null, orphanJob:null, orphConfirm:false
+};
+const LS = { get:k=>{try{return localStorage.getItem(k);}catch(e){return null;}}, set:(k,v)=>{try{localStorage.setItem(k,v);}catch(e){}}, del:k=>{try{localStorage.removeItem(k);}catch(e){}} };
+S.site = LS.get("site") || null;
+S.unlocked = !SITE_PASS || LS.get("pass")===SITE_PASS;
+S.canEdit = LS.get("admin")===ADMIN_PASS;
+try{ const v=location.hash.replace("#",""); if(["home","dash","admin"].includes(v)) S.view=v; }catch(e){}
+
+const app = document.getElementById("app");
+const toastEl = (()=>{let t=null;return (msg)=>{ if(t) t.remove(); t=document.createElement("div"); t.className="toast"; t.textContent=msg; document.body.appendChild(t); setTimeout(()=>{t&&t.remove();t=null;},2600); };})();
+const esc = s => String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const fmtDate = iso => iso ? new Date(iso).toLocaleString("zh-TW",{month:"numeric",day:"numeric",hour:"2-digit",minute:"2-digit"}) : "";
+const today = () => new Date().toISOString().slice(0,10);
+const isOverdue = p => p.status==="open" && p.deadline && p.deadline < today();
+const replyKey = (pid,code)=> pid+"__"+code;
+const fmtSize = b => { b=b||0;
+  if(b>=1073741824) return (b/1073741824).toFixed(1).replace(/\.0$/,"")+" GB";
+  if(b>=1048576) return (b/1048576).toFixed(b>=104857600?0:1).replace(/\.0$/,"")+" MB";
+  if(b>=1024) return Math.round(b/1024)+" KB";
+  return b+" B"; };
+const replyKeysOf = pid => Object.keys(S.replies).filter(k=>k.startsWith(pid+"__"));
+function projectFileList(pid){ const p=S.projects.find(x=>x.id===pid); return [...(p?.files||[]), ...replyKeysOf(pid).flatMap(k=>S.replies[k].files||[])]; }
+function projectStats(pid){ const l=projectFileList(pid); return {count:l.length, bytes:l.reduce((a,f)=>a+(f.size||0),0)}; }
+function referencedIds(){
+  const set=new Set(), add=fs=>(fs||[]).forEach(f=>f&&f.id&&set.add(f.id));
+  S.projects.forEach(p=>add(p.files)); Object.values(S.replies).forEach(r=>add(r.files));
+  if(S.editingProject) add(S.editingProject.files); Object.values(S.draft).forEach(d=>add(d.files));
+  return set;
+}
+function replyFilesHTML(r){
+  if(r.filesClearedAt && !(r.files&&r.files.length)) return `<div class="meta">附件已於 ${fmtDate(r.filesClearedAt)} 清除</div>`;
+  return filesHTML(r.files,false);
+}
+
+/* ---------- 導覽 ---------- */
+document.querySelectorAll(".tab").forEach(b=>b.addEventListener("click",()=>{ S.view=b.dataset.view; S.projectId=null; try{location.hash=S.view;}catch(e){} render(); }));
+window.addEventListener("hashchange",()=>{ const v=location.hash.replace("#",""); if(["home","dash","admin"].includes(v)&&v!==S.view){S.view=v;S.projectId=null;render();} });
+document.getElementById("siteChip").addEventListener("click",()=>{ S.view="pick"; render(); });
+
+/* ---------- 渲染 ---------- */
+function render(){
+  document.querySelectorAll(".tab").forEach(b=>b.setAttribute("aria-selected", String(b.dataset.view===S.view)));
+  const chip=document.getElementById("siteChip");
+  chip.textContent = S.site ? (siteByCode[S.site]?.name || S.site) : "選擇據點";
+  if(S.loadErr){ app.innerHTML=`<div class="card"><div class="title">目前無法連線到資料</div><div class="meta" style="margin-top:4px">${S.loadErr}</div></div>`; return; }
+  if(!S.unlocked) return renderGate();
+  if(!S.site && S.view!=="pick" && S.view!=="admin"){ renderPick(true); return; }
+  if(S.view==="pick") return renderPick(false);
+  if(!S.loaded){ app.innerHTML=`<div class="empty">載入中…</div>`; return; }
+  if(S.view==="home") return S.projectId ? renderProject() : renderHome();
+  if(S.view==="dash") return S.projectId ? renderDashProject() : renderDash();
+  if(S.view==="admin") return S.canEdit ? renderAdmin() : renderAdminGate();
+}
+
+function renderGate(){
+  app.innerHTML=`<div class="card form"><div class="title">請輸入公司通關密碼</div>
+    <div class="meta">本網站供公司內部據點使用。密碼請向管理者索取，輸入一次後此裝置會記住。</div>
+    <div class="field"><input type="password" id="gatePass" placeholder="通關密碼" autocomplete="off"></div>
+    <button type="button" class="btn primary" id="gateGo">進入</button></div>`;
+  const inp=document.getElementById("gatePass");
+  const go=()=>{ if(inp.value===SITE_PASS){ LS.set("pass",inp.value); S.unlocked=true; render(); } else toastEl("密碼不正確"); };
+  document.getElementById("gateGo").addEventListener("click",go);
+  inp.addEventListener("keydown",e=>{ if(e.key==="Enter") go(); });
+  inp.focus();
+}
+function renderAdminGate(){
+  app.innerHTML=`<div class="card form"><div class="title">管理者登入</div>
+    <div class="meta">發布公告、結案、刪除專案需要管理者密碼。</div>
+    <div class="field"><input type="password" id="adminPass" placeholder="管理者密碼" autocomplete="off"></div>
+    <button type="button" class="btn primary" id="adminGo">進入管理</button></div>`;
+  const inp=document.getElementById("adminPass");
+  const go=()=>{ if(inp.value===ADMIN_PASS){ LS.set("admin",inp.value); S.canEdit=true; render(); } else toastEl("密碼不正確"); };
+  document.getElementById("adminGo").addEventListener("click",go);
+  inp.addEventListener("keydown",e=>{ if(e.key==="Enter") go(); });
+  inp.focus();
+}
+
+function renderPick(first){
+  const groups = GROUPS.map(g=>`
+    <div class="section-h">${g}</div>
+    <div class="site-list">${SITES.filter(s=>s.group===g).map(s=>`<button type="button" class="site-btn" data-code="${s.code}" aria-pressed="${s.code===S.site}">${showCode(s)?`<b>${s.code}</b>`:""}${esc(s.name)}</button>`).join("")}</div>`).join("");
+  app.innerHTML=`<div class="card"><div class="title">${first?"請先選擇您的據點":"切換據點"}</div><div class="meta">選定後，公告回覆會以此據點名義送出。之後可從右上角切換。</div></div>${groups}`;
+  app.querySelectorAll(".site-btn").forEach(b=>b.addEventListener("click",()=>{ S.site=b.dataset.code; LS.set("site",S.site); S.view="home"; S.projectId=null; render(); }));
+}
+
+function projectCardHTML(p, opts={}){
+  const total=SITES.length, done=countReplies(p.id);
+  const mine = S.site ? !!S.replies[replyKey(p.id,S.site)] : false;
+  const status = p.status==="closed" ? `<span class="pill closed">已結案</span>` : (mine ? `<span class="pill ok">本據點已回覆</span>` : `<span class="pill no">本據點未回覆</span>`);
+  const dl = p.deadline ? `<span class="${isOverdue(p)?"overdue":""}">期限 ${esc(p.deadline)}${isOverdue(p)?"（已逾期）":""}</span>` : "";
+  return `<div class="card clickable" data-pid="${p.id}">
+    <div class="row"><div class="grow title">${esc(p.title)}</div>${opts.noMine?"":status}</div>
+    <div class="row meta" style="margin-top:6px"><span>${dl}</span><span>回覆 ${done}/${total}</span></div>
+    <div class="bar" style="margin-top:8px"><i style="width:${Math.round(done/total*100)}%"></i></div>
+  </div>`;
+}
+function countReplies(pid){ return SITES.filter(s=>S.replies[replyKey(pid,s.code)]).length; }
+function sortedProjects(){ return [...S.projects].sort((a,b)=>(a.status===b.status?0:a.status==="open"?-1:1)||(b.createdAt||"").localeCompare(a.createdAt||"")); }
+
+function renderHome(){
+  const open=sortedProjects().filter(p=>p.status==="open"), closed=sortedProjects().filter(p=>p.status!=="open");
+  app.innerHTML = (open.length?`<div class="section-h">進行中的專案</div>`+open.map(p=>projectCardHTML(p)).join(""):`<div class="card empty">目前沒有進行中的專案。<br>管理者建立公告後會出現在這裡。</div>`)
+    + (closed.length?`<div class="section-h">已結案</div>`+closed.map(p=>projectCardHTML(p)).join(""):"");
+  app.querySelectorAll("[data-pid]").forEach(c=>c.addEventListener("click",()=>{ S.projectId=c.dataset.pid; render(); }));
+}
+
+function filesHTML(files, removable){
+  if(!files||!files.length) return `<div class="meta">沒有附件</div>`;
+  return `<div class="files">${files.map((f,i)=>{
+    const isPdf=(f.type||"").includes("pdf")||/\.pdf$/i.test(f.name||"");
+    const pic = f.thumb ? `<img src="${esc(f.thumb)}" alt="${esc(f.name)}">` : (isPdf?`<div class="pdf">PDF</div>`:`<div class="pdf" style="color:var(--muted)">圖片</div>`);
+    return `<div class="file"><a href="#" data-open="${esc(f.id)}" data-name="${esc(f.name)}" data-type="${esc(f.type||"")}">${pic}<div class="fn">${esc(f.name)}</div></a>${removable?`<button type="button" class="rm" data-rm="${i}" aria-label="移除">×</button>`:""}</div>`;
+  }).join("")}</div>`;
+}
+/* 點附件：先同步開新分頁（避免被瀏覽器擋下），再從資料庫把區塊組回檔案 */
+app.addEventListener("click",async ev=>{
+  const a=ev.target.closest("[data-open]"); if(!a) return; ev.preventDefault();
+  const id=a.dataset.open, name=a.dataset.name, type=a.dataset.type||"application/octet-stream";
+  const w=window.open("","_blank");
+  if(w){ try{ w.document.write(`<title>${esc(name)}</title><p style="font-family:sans-serif;padding:24px">載入中…</p>`); }catch(e){} }
+  try{
+    const url = await fileURL(id,type);
+    if(w) w.location.href=url; else location.href=url;
+  }catch(e){ if(w) w.close(); toastEl("檔案讀取失敗，可能已被刪除"); }
+});
+async function fileURL(id,type){
+  if(S.fileCache[id]) return S.fileCache[id];
+  const doc=S.db.collection("files").doc(id);
+  const meta=await doc.get(); if(!meta.exists) throw new Error("missing");
+  const n=meta.data().chunks||0, parts=[];
+  for(let i=0;i<n;i++){ const c=await doc.collection("chunks").doc(String(i)).get(); if(!c.exists) throw new Error("missing"); parts.push(c.data().data.toUint8Array()); }
+  const url=URL.createObjectURL(new Blob(parts,{type:meta.data().type||type}));
+  S.fileCache[id]=url; return url;
+}
+
+function renderProject(){
+  const p=S.projects.find(x=>x.id===S.projectId); if(!p){S.projectId=null;return renderHome();}
+  const key=replyKey(p.id,S.site), r=S.replies[key], site=siteByCode[S.site];
+  const d = S.draft[key] || (S.draft[key]={text:r?.text||"",files:[...(r?.files||[])]});
+  const canReply = p.status==="open";
+  app.innerHTML=`
+    <button type="button" class="back" id="back">‹ 返回公告列表</button>
+    <div class="card">
+      <div class="row"><div class="grow title" style="font-size:18px">${esc(p.title)}</div>${p.status==="closed"?`<span class="pill closed">已結案</span>`:""}</div>
+      <div class="meta" style="margin-top:4px">${p.deadline?`期限 <span class="${isOverdue(p)?"overdue":""}">${esc(p.deadline)}</span> · `:""}發布 ${fmtDate(p.createdAt)}</div>
+      <div class="body-text" style="margin-top:10px">${esc(p.body)}</div>
+      ${p.files&&p.files.length?`<div style="margin-top:10px">${filesHTML(p.files,false)}</div>`:""}
+      ${p.filesClearedAt&&!(p.files&&p.files.length)?`<div class="meta" style="margin-top:10px">本專案附件已於 ${fmtDate(p.filesClearedAt)} 清除</div>`:""}
+    </div>
+    <div class="card">
+      <div class="section-h">${esc(site.name)}${showCode(site)?`（${site.code}）`:""}的回覆</div>
+      ${r?`<div class="meta" style="margin-top:4px">最後更新 ${fmtDate(r.updatedAt)}</div>`:""}
+      ${canReply?`
+      <div class="form" style="margin-top:10px">
+        <div class="field"><label for="replyText">回覆內容</label><textarea id="replyText" placeholder="請填寫本據點的確認結果或說明">${esc(d.text)}</textarea></div>
+        <div class="field"><label>附件（照片或 PDF）</label>
+          <div id="fileList">${filesHTML(d.files,true)}</div>
+          <div class="row">
+            <input type="file" id="fileInput" accept="image/*,application/pdf" multiple hidden>
+            <button type="button" class="btn sm" id="addFile">＋ 加入檔案</button>
+            <span class="meta" id="upMsg"></span>
+          </div>
+        </div>
+        <div class="row"><button type="button" class="btn primary grow" id="submitReply">${r?"更新回覆":"送出回覆"}</button></div>
+      </div>`:`<div class="body-text" style="margin-top:8px">${r?esc(r.text):"<span class='meta'>本據點未回覆，專案已結案。</span>"}</div>${r?`<div style="margin-top:8px">${replyFilesHTML(r)}</div>`:""}`}
+    </div>
+    <div class="card">
+      <div class="section-h">各據點回覆狀況</div>
+      ${statusGridHTML(p.id)}
+    </div>`;
+  document.getElementById("back").addEventListener("click",()=>{S.projectId=null;render();});
+  if(!canReply) return;
+  const ta=document.getElementById("replyText"); ta.addEventListener("input",()=>{d.text=ta.value;});
+  const fi=document.getElementById("fileInput");
+  document.getElementById("addFile").addEventListener("click",()=>fi.click());
+  fi.addEventListener("change",()=>handleFiles(fi.files,d,key,"fileList","upMsg","addFile"));
+  bindRemove(d,"fileList");
+  document.getElementById("submitReply").addEventListener("click",()=>submitReply(p,d,key));
+}
+function bindRemove(d,listId){
+  const fl=document.getElementById(listId); if(!fl) return;
+  fl.querySelectorAll("[data-rm]").forEach(b=>b.addEventListener("click",()=>{ d.files.splice(Number(b.dataset.rm),1); fl.innerHTML=filesHTML(d.files,true); bindRemove(d,listId); }));
+}
+async function shrinkImage(file){
+  if(!file.type.startsWith("image/")) return file;
+  try{
+    const bmp = await createImageBitmap(file);
+    const max=1800, sc=Math.min(1, max/Math.max(bmp.width,bmp.height));
+    if(sc===1 && file.size<2.5e6 && /jpeg|png|webp/.test(file.type)) return file;
+    const c=document.createElement("canvas"); c.width=Math.round(bmp.width*sc); c.height=Math.round(bmp.height*sc);
+    c.getContext("2d").drawImage(bmp,0,0,c.width,c.height);
+    const blob = await new Promise(res=>c.toBlob(res,"image/jpeg",0.85));
+    return blob ? new File([blob], file.name.replace(/\.[^.]+$/,"")+".jpg", {type:"image/jpeg"}) : file;
+  }catch(e){ return file; }
+}
+/* 附件切成 900 KB 的區塊存進 Firestore（免費方案不必開 Storage）；回傳 {id,name,type,size,chunks,thumb} */
+const CHUNK=900*1024, MAX_FILE=20*1048576;
+async function makeThumb(file){
+  try{ const bmp=await createImageBitmap(file); const sc=Math.min(1,200/Math.max(bmp.width,bmp.height));
+    const c=document.createElement("canvas"); c.width=Math.max(1,Math.round(bmp.width*sc)); c.height=Math.max(1,Math.round(bmp.height*sc));
+    c.getContext("2d").drawImage(bmp,0,0,c.width,c.height); return c.toDataURL("image/jpeg",0.7); }catch(e){ return null; }
+}
+async function uploadFile(f0,onProgress){
+  const f = await shrinkImage(f0);
+  const type = f.type || (f0.name.toLowerCase().endsWith(".pdf")?"application/pdf":"application/octet-stream");
+  if(f.size>MAX_FILE) throw Object.assign(new Error("too_large"),{code:"too_large"});
+  const buf=new Uint8Array(await f.arrayBuffer()), n=Math.ceil(buf.length/CHUNK)||1;
+  const id = `${Date.now().toString(36)}${Math.random().toString(36).slice(2,8)}`;
+  const doc=S.db.collection("files").doc(id);
+  await doc.set({name:f0.name,type,size:buf.length,chunks:n,createdAt:new Date().toISOString()});
+  for(let i=0;i<n;i++){
+    await doc.collection("chunks").doc(String(i)).set({data:firebase.firestore.Blob.fromUint8Array(buf.subarray(i*CHUNK,(i+1)*CHUNK))});
+    if(onProgress) onProgress((i+1)/n);
+  }
+  const rec={id,name:f0.name,type,size:buf.length,chunks:n};
+  if(type.startsWith("image/")){ const t=await makeThumb(f); if(t) rec.thumb=t; }
+  return rec;
+}
+async function deleteStored(f){
+  if(!f||!f.id) return;
+  const doc=S.db.collection("files").doc(f.id);
+  const cs=await doc.collection("chunks").get();
+  for(const c of cs.docs) await c.ref.delete();
+  await doc.delete();
+  if(S.fileCache[f.id]){ URL.revokeObjectURL(S.fileCache[f.id]); delete S.fileCache[f.id]; }
+}
+async function handleFiles(list,d,key,listId,msgId,btnId){
+  if(!list.length) return; S.uploading=true;
+  const msg=document.getElementById(msgId), btn=document.getElementById(btnId); if(btn) btn.disabled=true;
+  let n=0;
+  for(const f0 of list){
+    n++; if(msg) msg.textContent=`上傳中 ${n}/${list.length}…`;
+    try{ d.files.push(await uploadFile(f0, p=>{ if(msg) msg.textContent=`上傳中 ${n}/${list.length}（${Math.round(p*100)}%）…`; })); }
+    catch(e){ toastEl(e?.code==="too_large"?`${f0.name} 超過 20MB`:e?.code==="permission-denied"?"沒有上傳權限，請檢查 Firestore 規則":`${f0.name} 上傳失敗`); }
+  }
+  S.uploading=false; if(btn) btn.disabled=false; if(msg) msg.textContent="";
+  const fl=document.getElementById(listId); if(fl){fl.innerHTML=filesHTML(d.files,true); bindRemove(d,listId);}
+}
+async function submitReply(p,d,key){
+  if(S.uploading){toastEl("檔案還在上傳中");return;}
+  if(!d.text.trim() && !d.files.length){toastEl("請填寫回覆內容或加入附件");return;}
+  const btn=document.getElementById("submitReply"); btn.disabled=true;
+  try{
+    await S.db.collection("replies").doc(key).set({projectId:p.id,site:S.site,text:d.text.trim(),files:d.files,updatedAt:new Date().toISOString()});
+    toastEl("已送出"); delete S.draft[key];
+  }catch(e){ toastEl("送出失敗，請再試一次"); btn.disabled=false; }
+}
+
+function statusGridHTML(pid){
+  return GROUPS.map(g=>{
+    const list=SITES.filter(s=>s.group===g), done=list.filter(s=>S.replies[replyKey(pid,s.code)]).length;
+    return `<div class="group-h"><span>${g}</span><span>${done}/${list.length}</span></div>
+    <div class="grid">${list.map(s=>{const r=S.replies[replyKey(pid,s.code)];return `<div class="cell ${r?"ok":""}">${showCode(s)?`<span class="code">${s.code}</span>`:""}<span class="nm">${esc(s.name)}</span><span class="st">${r?"已回覆 "+fmtDate(r.updatedAt):"未回覆"}</span></div>`;}).join("")}</div>`;
+  }).join("");
+}
+
+function renderDash(){
+  const ps=sortedProjects(), open=ps.filter(p=>p.status==="open"), total=SITES.length;
+  const sum = open.length?`<div class="card"><div class="row"><div class="grow"><div class="meta">進行中專案</div><div class="big">${open.length}</div></div><div class="grow"><div class="meta">待回覆項目</div><div class="big">${open.reduce((a,p)=>a+(total-countReplies(p.id)),0)}</div></div></div></div>`:"";
+  app.innerHTML = sum + (ps.length ? ps.map(p=>projectCardHTML(p)).join("") : `<div class="card empty">尚無專案。</div>`);
+  app.querySelectorAll("[data-pid]").forEach(c=>c.addEventListener("click",()=>{ S.projectId=c.dataset.pid; render(); }));
+}
+function renderDashProject(){
+  const p=S.projects.find(x=>x.id===S.projectId); if(!p){S.projectId=null;return renderDash();}
+  const done=countReplies(p.id), total=SITES.length;
+  const replies = SITES.map(s=>({s,r:S.replies[replyKey(p.id,s.code)]})).filter(x=>x.r).sort((a,b)=>(b.r.updatedAt||"").localeCompare(a.r.updatedAt||""));
+  app.innerHTML=`
+    <button type="button" class="back" id="back">‹ 返回儀表板</button>
+    <div class="card">
+      <div class="row"><div class="grow title" style="font-size:18px">${esc(p.title)}</div>${p.status==="closed"?`<span class="pill closed">已結案</span>`:""}</div>
+      <div class="meta" style="margin-top:4px">${p.deadline?`期限 <span class="${isOverdue(p)?"overdue":""}">${esc(p.deadline)}</span> · `:""}已回覆 ${done}/${total}</div>
+      <div class="bar" style="margin-top:8px"><i style="width:${Math.round(done/total*100)}%"></i></div>
+    </div>
+    <div class="card"><div class="section-h">各據點回覆狀況</div>${statusGridHTML(p.id)}</div>
+    <div class="card"><div class="section-h">回覆內容</div>
+      ${replies.length?`<div class="reply-list" style="margin-top:8px">${replies.map(({s,r})=>`<div class="reply-item"><div class="row"><b>${esc(s.name)}</b><span class="meta">${showCode(s)?s.code+" · ":""}${fmtDate(r.updatedAt)}</span></div><div class="body-text">${esc(r.text)||"<span class='meta'>（僅附件）</span>"}</div>${(S.canEdit||s.code===S.site)?`<div style="margin-top:6px">${replyFilesHTML(r)}</div>`:(r.files&&r.files.length?`<div class="meta">附件 ${r.files.length} 件（僅該據點與管理者可檢視）</div>`:"")}</div>`).join("")}</div>`:`<div class="meta" style="margin-top:6px">尚無回覆</div>`}
+    </div>`;
+  document.getElementById("back").addEventListener("click",()=>{S.projectId=null;render();});
+}
+
+/* ---------- 管理 ---------- */
+function renderAdmin(){
+  const e=S.editingProject;
+  const form = `<div class="card form">
+    <div class="row"><div class="grow title">${e&&e.id?"編輯公告":"新增公告"}</div><button type="button" class="btn sm" id="adminOut">登出管理</button></div>
+    <div class="field"><label for="pTitle">專案名稱</label><input type="text" id="pTitle" placeholder="例：全省消防檢修資料確認" value="${esc(e?.title||"")}"></div>
+    <div class="field"><label for="pBody">公告內容</label><textarea id="pBody" placeholder="說明要各據點確認或回覆的事項">${esc(e?.body||"")}</textarea></div>
+    <div class="field"><label for="pDeadline">回覆期限（可留空）</label><input type="date" id="pDeadline" value="${esc(e?.deadline||"")}"></div>
+    <div class="field"><label>公告附件</label><div id="pFileList">${filesHTML(e?.files||[],true)}</div>
+      <div class="row"><input type="file" id="pFileInput" accept="image/*,application/pdf" multiple hidden><button type="button" class="btn sm" id="pAddFile">＋ 加入檔案</button><span class="meta" id="pUpMsg"></span></div></div>
+    <div class="row"><button type="button" class="btn primary grow" id="pSave">${e&&e.id?"儲存變更":"發布公告"}</button>${e&&e.id?`<button type="button" class="btn" id="pCancel">取消</button>`:""}</div>
+  </div>`;
+  const list = sortedProjects().map(p=>{
+    const st=projectStats(p.id), busy=!!(S.clearing&&S.clearing.pid===p.id);
+    const fileMeta = st.count ? ` · 附件 ${st.count} 件（${fmtSize(st.bytes)}）` : (p.filesClearedAt?" · 附件已清除":"");
+    const canClear = p.status==="closed" && st.count>0;
+    return `<div class="card"><div class="row"><div class="grow title">${esc(p.title)}</div>${p.status==="closed"?`<span class="pill closed">已結案</span>`:`<span class="pill ok">進行中</span>`}</div>
+    <div class="meta" style="margin-top:4px">${p.deadline?"期限 "+esc(p.deadline)+" · ":""}回覆 ${countReplies(p.id)}/${SITES.length}${fileMeta}</div>
+    <div class="row" style="margin-top:10px"><button type="button" class="btn sm" data-edit="${p.id}">編輯</button><button type="button" class="btn sm" data-toggle="${p.id}">${p.status==="closed"?"重新開放":"結案"}</button>${canClear?`<button type="button" class="btn sm" data-clear="${p.id}" ${S.clearing?"disabled":""}>清除附件</button>`:""}<button type="button" class="btn sm danger" data-del="${p.id}" ${busy?"disabled":""}>刪除</button></div>
+    ${busy?`<div class="notice" style="margin-top:8px" id="clr-prog">清除中 ${S.clearing.done}/${S.clearing.total}…</div>`:""}
+    ${canClear&&!busy?`<div id="clrc-${p.id}" hidden class="notice" style="margin-top:8px">將永久刪除此專案的 ${st.count} 個附件（${fmtSize(st.bytes)}），包含公告附件與各據點回覆的照片、PDF；文字回覆會保留。<span class="overdue">刪除後無法復原。</span><div class="row" style="margin-top:8px"><button type="button" class="btn sm danger" data-clear-yes="${p.id}">確定清除</button><button type="button" class="btn sm" data-clear-no="${p.id}">取消</button></div></div>`:""}
+    <div id="confirm-${p.id}" hidden class="notice" style="margin-top:8px">確定要刪除此專案、所有回覆及附件？ <button type="button" class="btn sm danger" data-del-yes="${p.id}">確定刪除</button></div></div>`;
+  }).join("");
+  app.innerHTML = form + `<div class="card" id="storageBox">${storageInner()}</div>` + `<div class="section-h">所有專案</div>` + (list||`<div class="card empty">尚無專案</div>`);
+  bindStorage();
+  document.getElementById("adminOut").addEventListener("click",()=>{ LS.del("admin"); S.canEdit=false; S.editingProject=null; S.view="home"; render(); });
+  const d = S.editingProject || (S.editingProject={files:[]}); d.files=d.files||[];
+  const fi=document.getElementById("pFileInput");
+  document.getElementById("pAddFile").addEventListener("click",()=>fi.click());
+  fi.addEventListener("change",()=>handleFiles(fi.files,d,null,"pFileList","pUpMsg","pAddFile"));
+  bindRemove(d,"pFileList");
+  ["pTitle","pBody","pDeadline"].forEach(id=>document.getElementById(id).addEventListener("input",ev=>{ d[{pTitle:"title",pBody:"body",pDeadline:"deadline"}[id]]=ev.target.value; }));
+  document.getElementById("pSave").addEventListener("click",async()=>{
+    if(S.uploading){toastEl("檔案還在上傳中");return;}
+    const title=document.getElementById("pTitle").value.trim(), body=document.getElementById("pBody").value.trim(), deadline=document.getElementById("pDeadline").value;
+    if(!title){toastEl("請輸入專案名稱");return;}
+    const btn=document.getElementById("pSave"); btn.disabled=true;
+    try{
+      if(d.id){ await S.db.collection("projects").doc(d.id).update({title,body,deadline,files:d.files}); toastEl("已儲存"); }
+      else { await S.db.collection("projects").add({title,body,deadline,files:d.files,status:"open",createdAt:new Date().toISOString()}); toastEl("已發布"); }
+      S.editingProject=null; render();
+    }catch(e){ toastEl("儲存失敗，請再試一次"); btn.disabled=false; }
+  });
+  document.getElementById("pCancel")?.addEventListener("click",()=>{S.editingProject=null;render();});
+  app.querySelectorAll("[data-edit]").forEach(b=>b.addEventListener("click",()=>{ const p=S.projects.find(x=>x.id===b.dataset.edit); S.editingProject={id:p.id,title:p.title,body:p.body,deadline:p.deadline||"",files:[...(p.files||[])]}; render(); window.scrollTo({top:0}); }));
+  app.querySelectorAll("[data-toggle]").forEach(b=>b.addEventListener("click",async()=>{ const p=S.projects.find(x=>x.id===b.dataset.toggle); try{ await S.db.collection("projects").doc(p.id).update({status:p.status==="closed"?"open":"closed"}); }catch(e){toastEl("更新失敗");} }));
+  app.querySelectorAll("[data-del]").forEach(b=>b.addEventListener("click",()=>{ document.getElementById("confirm-"+b.dataset.del).hidden=false; }));
+  app.querySelectorAll("[data-del-yes]").forEach(b=>b.addEventListener("click",async()=>{ const pid=b.dataset.delYes; b.disabled=true;
+    const files=projectFileList(pid);
+    try{ for(const k of replyKeysOf(pid)) await S.db.collection("replies").doc(k).delete(); await S.db.collection("projects").doc(pid).delete(); }
+    catch(e){ toastEl("刪除失敗"); b.disabled=false; return; }
+    let left=0; for(const f of files){ try{ await deleteStored(f); }catch(e){ left++; } }
+    toastEl(left?`已刪除專案，另有 ${left} 個附件請稍後到「儲存空間」清理`:"已刪除");
+    loadStorage();
+  }));
+  app.querySelectorAll("[data-clear]").forEach(b=>b.addEventListener("click",()=>{ const el=document.getElementById("clrc-"+b.dataset.clear); if(el) el.hidden=false; }));
+  app.querySelectorAll("[data-clear-no]").forEach(b=>b.addEventListener("click",()=>{ const el=document.getElementById("clrc-"+b.dataset.clearNo); if(el) el.hidden=true; }));
+  app.querySelectorAll("[data-clear-yes]").forEach(b=>b.addEventListener("click",()=>{ b.disabled=true; clearProjectFiles(b.dataset.clearYes); }));
+  if(!S.store || (!S.store.loading && Date.now()-(S.store.at||0)>60000)) loadStorage();
+}
+
+/* ---------- 儲存空間（Firestore 免費額度 1 GB） ---------- */
+const FREE_BYTES = 1*1073741824;
+async function loadStorage(){
+  if(S.store?.loading) return;
+  S.store={...(S.store||{}),loading:true}; renderStorage();
+  try{
+    const res=await S.db.collection("files").get();
+    const ref=referencedIds(), cutoff=Date.now()-24*3600e3;
+    const orphans=res.docs.filter(d=>!ref.has(d.id) && Date.parse(d.data().createdAt||0)<cutoff).map(d=>d.id);
+    const used=res.docs.reduce((a,d)=>a+(d.data().size||0),0);
+    S.store={files:res.size,used,orphans,at:Date.now(),loading:false,err:null};
+  }catch(e){ S.store={...S.store,loading:false,at:Date.now(),err:"暫時無法讀取儲存空間，請稍後再按重新整理"}; }
+  renderStorage();
+}
+function storageInner(){
+  const head=`<div class="row"><div class="grow section-h">儲存空間</div><button type="button" class="btn sm" id="stRefresh" ${S.store?.loading||S.orphanJob?"disabled":""}>重新整理</button></div>`;
+  const st=S.store||{};
+  if(st.files==null) return head+`<div class="meta" style="margin-top:4px">${st.err?esc(st.err):"讀取中…"}</div>`;
+  const pb=st.used/FREE_BYTES, hi=pb>=0.8;
+  let orphHTML="";
+  if(S.orphanJob) orphHTML=`<div class="notice" style="margin-top:10px" id="orphProg">清理中 ${S.orphanJob.done}/${S.orphanJob.total}…</div>`;
+  else if(st.orphans.length) orphHTML=`<div class="notice" style="margin-top:10px">有 ${st.orphans.length} 個檔案已經沒有任何公告或回覆在使用，多半是據點修改回覆時換掉的舊檔。只會列出上傳超過一天的檔案。
+      <div class="row" style="margin-top:8px">${S.orphConfirm?`<span class="overdue">刪除後無法復原。</span><button type="button" class="btn sm danger" id="orphYes">確定清理</button><button type="button" class="btn sm" id="orphNo">取消</button>`:`<button type="button" class="btn sm" id="orphClean">清理這些檔案</button>`}</div></div>`;
+  return head+`
+    <div class="usage-line"><span class="big">${fmtSize(st.used)}</span><span class="meta">／ 免費額度 1 GB（已用 ${(pb*100).toFixed(1).replace(/\.0$/,"")}%）</span></div>
+    <div class="bar meter${hi?" hi":""}" style="margin-top:8px"><i style="width:${Math.min(100,Math.max(pb*100,st.used?0.5:0)).toFixed(1)}%"></i></div>
+    <div class="meta" style="margin-top:6px">檔案共 ${st.files} 個${st.loading?" · 更新中…":""}${st.err?` · ${esc(st.err)}`:""}</div>
+    ${hi?`<div class="overdue" style="margin-top:6px">空間快用完了，請清除已結案專案的附件。</div>`:""}
+    ${orphHTML}`;
+}
+function renderStorage(){ const box=document.getElementById("storageBox"); if(box){ box.innerHTML=storageInner(); bindStorage(); } }
+function bindStorage(){
+  document.getElementById("stRefresh")?.addEventListener("click",()=>loadStorage());
+  document.getElementById("orphClean")?.addEventListener("click",()=>{ S.orphConfirm=true; renderStorage(); });
+  document.getElementById("orphNo")?.addEventListener("click",()=>{ S.orphConfirm=false; renderStorage(); });
+  document.getElementById("orphYes")?.addEventListener("click",()=>cleanOrphans());
+}
+async function clearProjectFiles(pid){
+  const p=S.projects.find(x=>x.id===pid); if(!p||S.clearing) return;
+  const keys=replyKeysOf(pid).filter(k=>(S.replies[k].files||[]).length);
+  const total=projectFileList(pid).length; if(!total) return;
+  S.clearing={pid,done:0,total}; render();
+  const now=new Date().toISOString(); let removed=0, freed=0, dbFail=false;
+  const tick=()=>{ S.clearing.done++; const el=document.getElementById("clr-prog"); if(el) el.textContent=`清除中 ${S.clearing.done}/${S.clearing.total}…`; };
+  const delAll=async files=>{ const keep=[]; for(const f of files){ try{ await deleteStored(f); removed++; freed+=f.size||0; }catch(e){ keep.push(f); } tick(); } return keep; };
+  for(const k of keys){
+    const before=S.replies[k].files||[], keep=await delAll(before);
+    if(keep.length===before.length) continue;
+    try{ await S.db.collection("replies").doc(k).update(keep.length?{files:keep}:{files:[],filesClearedAt:now}); }catch(e){ dbFail=true; }
+  }
+  const pFiles=p.files||[]; let pKeep=pFiles;
+  if(pFiles.length) pKeep=await delAll(pFiles);
+  const left=total-removed;
+  if(left===0 || pKeep.length!==pFiles.length){ try{ await S.db.collection("projects").doc(pid).update(left===0?{files:[],filesClearedAt:now}:{files:pKeep}); }catch(e){ dbFail=true; } }
+  S.clearing=null;
+  toastEl(dbFail ? "附件已刪除，但部分紀錄沒有更新成功，請重新整理頁面" : left===0 ? `已清除 ${removed} 個附件，釋放 ${fmtSize(freed)}` : `已清除 ${removed} 個，還有 ${left} 個沒清掉，請稍後再按一次「清除附件」`);
+  render(); loadStorage();
+}
+async function cleanOrphans(){
+  if(S.orphanJob) return;
+  const list=S.store?.orphans||[]; S.orphConfirm=false;
+  if(!list.length){ renderStorage(); return; }
+  S.orphanJob={done:0,total:list.length}; renderStorage();
+  let n=0; const ref=referencedIds();
+  for(const id of list){
+    if(!ref.has(id)){ try{ await deleteStored({id}); n++; }catch(e){} }
+    S.orphanJob.done++; const el=document.getElementById("orphProg"); if(el) el.textContent=`清理中 ${S.orphanJob.done}/${S.orphanJob.total}…`;
+  }
+  S.orphanJob=null; toastEl(`已清理 ${n} 個檔案`); loadStorage();
+}
+
+/* ---------- 啟動 ---------- */
+render();
+(function start(){
+  if(!window.firebase){ S.loadErr="Firebase 程式庫載入失敗，請檢查網路連線後重新整理。"; render(); return; }
+  if(!FIREBASE_CONFIG.apiKey || FIREBASE_CONFIG.apiKey==="請貼上"){
+    S.loadErr=`尚未設定 Firebase。請打開 <code>index.html</code>，把 Firebase 主控台提供的 <code>firebaseConfig</code> 貼到檔案開頭的 <code>FIREBASE_CONFIG</code>。`; render(); return;
+  }
+  try{ firebase.initializeApp(FIREBASE_CONFIG); S.db=firebase.firestore(); }
+  catch(e){ S.loadErr="Firebase 設定有誤："+esc(e.message); render(); return; }
+  let gotP=false, gotR=false;
+  const timer=setTimeout(()=>{ if(!(gotP&&gotR)){ S.loadErr="資料讀取逾時，請檢查網路後重新整理。若是第一次設定，請確認 Firestore 資料庫已建立且規則已發布。"; render(); } },15000);
+  const done=()=>{ if(gotP&&gotR){ clearTimeout(timer); S.loaded=true; S.loadErr=null; } render(); };
+  const fail=(what)=>e=>{ clearTimeout(timer); S.loadErr=`無法讀取${what}（${esc(e.code||e.message)}）。${e.code==="permission-denied"?"請到 Firebase 主控台 → Firestore Database → 規則，貼上附的 firestore.rules 並發布。":""}`; render(); };
+  S.db.collection("projects").onSnapshot(snap=>{ S.projects=snap.docs.map(x=>({id:x.id,...x.data()})); gotP=true; done(); }, fail("專案資料"));
+  S.db.collection("replies").onSnapshot(snap=>{ S.replies={}; snap.docs.forEach(x=>{S.replies[x.id]=x.data();}); gotR=true; done(); }, fail("回覆資料"));
+})();
+</script>
+</body>
+</html>
