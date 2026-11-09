@@ -65,6 +65,7 @@ textarea{min-height:110px;resize:vertical}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:6px}
 .cell{border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:13px;display:flex;flex-direction:column;gap:2px;min-width:0}
 .cell.ok{background:var(--ok-soft);border-color:transparent;cursor:pointer}
+.cell.can{cursor:pointer}
 .cell.ok:active,.cell.focus{outline:2px solid var(--accent);outline-offset:-2px}
 .cell .code{font-family:var(--mono);font-size:11px;color:var(--muted)}
 .cell .nm{font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -173,7 +174,7 @@ const S = {
   canEdit:false, fileCache:{},
   projects:[], replies:{}, loaded:false, loadErr:null,
   draft:{}, uploading:false, editingProject:null, acct:null,
-  store:null, clearing:null, orphanJob:null, orphConfirm:false, focusSite:null, zipping:null, filter:"all"
+  store:null, clearing:null, orphanJob:null, orphConfirm:false, focusSite:null, editSite:null, zipping:null, filter:"all"
 };
 const LS = { get:k=>{try{return localStorage.getItem(k);}catch(e){return null;}}, set:(k,v)=>{try{localStorage.setItem(k,v);}catch(e){}}, del:k=>{try{localStorage.removeItem(k);}catch(e){}} };
 ["pass","admin"].forEach(k=>LS.del(k));   // 舊版通關密碼紀錄，已不使用
@@ -206,7 +207,7 @@ function replyFilesHTML(r){
 }
 
 /* ---------- 導覽 ---------- */
-document.querySelectorAll(".tab").forEach(b=>b.addEventListener("click",()=>{ S.view=b.dataset.view; S.projectId=null; try{location.hash=S.view;}catch(e){} render(); }));
+document.querySelectorAll(".tab").forEach(b=>b.addEventListener("click",()=>{ S.view=b.dataset.view; S.projectId=null; S.focusSite=null; S.editSite=null; try{location.hash=S.view;}catch(e){} render(); }));
 window.addEventListener("hashchange",()=>{ const v=location.hash.replace("#",""); if(["home","dash","admin"].includes(v)&&v!==S.view){S.view=v;S.projectId=null;render();} });
 document.getElementById("siteChip").addEventListener("click",()=>{ if(!S.user) return; S.view="account"; S.projectId=null; render(); });
 
@@ -344,7 +345,9 @@ async function fileURL(id,type){
 /* 點儀表板上已回覆的據點 → 顯示該站回覆明細 */
 app.addEventListener("click",ev=>{
   const c=ev.target.closest("[data-site-open]"); if(!c) return;
-  S.view="dash"; S.projectId=c.dataset.pid; S.focusSite=c.dataset.siteOpen; try{location.hash="dash";}catch(e){}
+  const pid=c.dataset.pid, code=c.dataset.siteOpen, p=S.projects.find(x=>x.id===pid);
+  S.view="dash"; S.projectId=pid; S.focusSite=code; S.editSite=null; try{location.hash="dash";}catch(e){}
+  if(p && !S.replies[replyKey(pid,code)] && canEditReply(p,code)) startEdit(pid,code);
   render(); document.getElementById("focusCard")?.scrollIntoView({behavior:"smooth",block:"start"});
 });
 
@@ -451,14 +454,36 @@ async function handleFiles(list,d,key,listId,msgId,btnId){
   S.uploading=false; if(btn) btn.disabled=false; if(msg) msg.textContent="";
   const fl=document.getElementById(listId); if(fl){fl.innerHTML=filesHTML(d.files,true); bindRemove(d,listId);}
 }
-async function submitReply(p,d,key){
-  if(S.uploading){toastEl("檔案還在上傳中");return;}
-  if(!d.text.trim() && !d.files.length){toastEl("請填寫回覆內容或加入附件");return;}
-  const btn=document.getElementById("submitReply"); btn.disabled=true;
+async function submitReply(p,d,key){ await saveReply(p,S.site,d,key,document.getElementById("submitReply")); }
+/* 儲存某據點的回覆；管理者存檔時順便刪掉被移除的舊附件（據點帳號沒有刪除權限，舊檔留給「儲存空間」清理） */
+async function saveReply(p,code,d,key,btn){
+  if(S.uploading){toastEl("檔案還在上傳中");return false;}
+  if(!d.text.trim() && !d.files.length){toastEl("請填寫回覆內容或加入附件");return false;}
+  if(btn) btn.disabled=true;
+  const oldFiles=(S.replies[key]?.files)||[];
   try{
-    await S.db.collection("replies").doc(key).set({projectId:p.id,site:S.site,text:d.text.trim(),files:d.files,updatedAt:new Date().toISOString()});
-    toastEl("已送出"); delete S.draft[key];
-  }catch(e){ toastEl(e?.code==="permission-denied"?"沒有權限：只能回覆自己據點，且專案需在進行中":"送出失敗，請再試一次"); btn.disabled=false; }
+    await S.db.collection("replies").doc(key).set({projectId:p.id,site:code,text:d.text.trim(),files:d.files,updatedAt:new Date().toISOString()});
+  }catch(e){ toastEl(e?.code==="permission-denied"?"沒有權限：只能回覆自己據點，且專案需在進行中":"送出失敗，請再試一次"); if(btn) btn.disabled=false; return false; }
+  toastEl("已儲存"); delete S.draft[key];
+  if(S.canEdit){ const keep=new Set(d.files.map(f=>f.id)); for(const f of oldFiles){ if(!keep.has(f.id)){ try{ await deleteStored(f); }catch(e){} } } }
+  return true;
+}
+/* 管理者刪除整筆回覆（含附件） */
+async function deleteReply(p,code){
+  const key=replyKey(p.id,code), r=S.replies[key]; if(!S.canEdit||!r) return;
+  try{ await S.db.collection("replies").doc(key).delete(); }
+  catch(e){ toastEl("刪除失敗，請再試一次"); render(); return; }
+  delete S.draft[key]; S.editSite=null; S.focusSite=null;
+  let left=0; for(const f of (r.files||[])){ try{ await deleteStored(f); }catch(e){ left++; } }
+  toastEl(left?`已刪除回覆，另有 ${left} 個附件請稍後到「儲存空間」清理`:"已刪除回覆");
+  render();
+}
+/* 誰能改哪個據點的回覆：管理者全部可改；據點只能改自己，且專案需進行中（與 Firestore 規則一致） */
+function canEditReply(p,code){ return S.canEdit || (code===S.site && p.status==="open"); }
+function startEdit(pid,code){
+  const key=replyKey(pid,code), r=S.replies[key];
+  S.draft[key]={text:r?.text||"",files:[...(r?.files||[])]};
+  S.focusSite=code; S.editSite=code;
 }
 
 function passFilter(pid,s){ const r=!!S.replies[replyKey(pid,s.code)]; return S.view!=="dash" || S.filter==="all" || (S.filter==="pending"?!r:r); }
@@ -481,11 +506,12 @@ function replyPreviewHTML(r){
   return `<span class="st">${r.files&&r.files.length?`（僅附件 ${r.files.length} 件）`:"已回覆"}</span>`;
 }
 function statusGridHTML(pid){
+  const p=S.projects.find(x=>x.id===pid);
   return SECTIONS.map(sec=>{
     const all=sec.list, done=all.filter(s=>S.replies[replyKey(pid,s.code)]).length, list=all.filter(s=>passFilter(pid,s));
     if(!list.length) return "";
     return `<div class="group-h"><span>${sec.label}</span><span>${done}/${all.length}</span></div>
-    <div class="grid">${list.map(s=>{const r=S.replies[replyKey(pid,s.code)];return `<div class="cell ${r?"ok":""}${S.focusSite===s.code&&S.view==="dash"?" focus":""}" ${r?`data-site-open="${s.code}" data-pid="${pid}" role="button" tabindex="0"`:""}>${showCode(s)?`<span class="code">${s.code}</span>`:""}<span class="nm">${esc(s.name)}</span>${r?replyPreviewHTML(r):`<span class="st">未回覆</span>`}</div>`;}).join("")}</div>`;
+    <div class="grid">${list.map(s=>{const r=S.replies[replyKey(pid,s.code)];const ed=!!p&&canEditReply(p,s.code);return `<div class="cell ${r?"ok":ed?"can":""}${S.focusSite===s.code&&S.view==="dash"?" focus":""}" ${r||ed?`data-site-open="${s.code}" data-pid="${pid}" role="button" tabindex="0"`:""}>${showCode(s)?`<span class="code">${s.code}</span>`:""}<span class="nm">${esc(s.name)}</span>${r?replyPreviewHTML(r):`<span class="st">${ed&&!S.canEdit?"未回覆・點此回覆":"未回覆"}</span>`}</div>`;}).join("")}</div>`;
   }).join("");
 }
 
@@ -497,15 +523,29 @@ function renderDash(){
 }
 function canSeeFiles(code){ return S.canEdit || code===S.site; }
 function replyDetailHTML(p,s,r){
-  return `<div class="row"><b>${esc(s.name)}</b><span class="meta">${showCode(s)?s.code+" · ":""}${fmtDate(r.updatedAt)}</span></div>
+  return `<div class="row"><b>${esc(s.name)}</b><span class="meta grow">${showCode(s)?s.code+" · ":""}${fmtDate(r.updatedAt)}</span>${canEditReply(p,s.code)&&!(S.editSite===s.code)?`<button type="button" class="btn sm" data-edit-reply="${s.code}">編輯</button>`:""}</div>
     <div class="body-text">${esc(r.text)||"<span class='meta'>（僅附件）</span>"}</div>
     ${canSeeFiles(s.code)?`<div style="margin-top:6px">${replyFilesHTML(r)}</div>`:(r.files&&r.files.length?`<div class="meta">附件 ${r.files.length} 件（登入「管理」後可檢視）</div>`:"")}`;
+}
+function replyEditorHTML(p,s,r,d){
+  const n=(r?.files||[]).length;
+  return `<div class="form">
+    <div class="field"><label for="dText">回覆內容</label><textarea id="dText" placeholder="請填寫${esc(s.name)}的確認結果或說明">${esc(d.text)}</textarea></div>
+    <div class="field"><label>附件（照片或 PDF）</label><div id="dFileList">${filesHTML(d.files,true)}</div>
+      <div class="row"><input type="file" id="dFileInput" accept="image/*,application/pdf" multiple hidden><button type="button" class="btn sm" id="dAddFile">＋ 加入檔案</button><span class="meta" id="dUpMsg"></span></div></div>
+    <div class="row"><button type="button" class="btn primary grow" id="dSave">${r?"儲存修改":"送出回覆"}</button><button type="button" class="btn" id="dCancel">取消</button></div>
+    ${S.canEdit&&r?`<div class="row"><button type="button" class="btn sm danger" id="dDel">刪除此回覆</button></div>
+    <div id="dDelConfirm" hidden class="notice">將刪除${esc(s.name)}的回覆${n?`與 ${n} 個附件`:""}，<span class="overdue">刪除後無法復原。</span>
+      <div class="row" style="margin-top:8px"><button type="button" class="btn sm danger" id="dDelYes">確定刪除</button><button type="button" class="btn sm" id="dDelNo">取消</button></div></div>`:""}
+  </div>`;
 }
 function renderDashProject(){
   const p=S.projects.find(x=>x.id===S.projectId); if(!p){S.projectId=null;return renderDash();}
   const done=countReplies(p.id), total=SITES.length;
   const replies = (S.filter==="pending"?[]:SITES.map(s=>({s,r:S.replies[replyKey(p.id,s.code)]})).filter(x=>x.r)).sort((a,b)=>(b.r.updatedAt||"").localeCompare(a.r.updatedAt||""));
   const fs=S.focusSite?siteByCode[S.focusSite]:null, fr=fs?S.replies[replyKey(p.id,fs.code)]:null;
+  const editing=!!fs && S.editSite===fs.code && canEditReply(p,fs.code), ekey=fs?replyKey(p.id,fs.code):null;
+  const d=editing?(S.draft[ekey]||(S.draft[ekey]={text:fr?.text||"",files:[...(fr?.files||[])]})):null;
   const z=S.zipping;
   app.innerHTML=`
     <button type="button" class="back" id="back">‹ 返回儀表板</button>
@@ -515,13 +555,26 @@ function renderDashProject(){
       <div class="bar" style="margin-top:8px"><i style="width:${Math.round(done/total*100)}%"></i></div>
       ${S.canEdit?`<div class="row" style="margin-top:10px"><button type="button" class="btn sm" id="zipBtn" ${z?"disabled":""}>${z?`打包中 ${z.done}/${z.total}…`:"打包下載全部內容（ZIP）"}</button><span class="meta">公告、附件、各據點回覆與回覆總表</span></div>`:""}
     </div>
-    <div class="card"><div class="section-h">各據點回覆狀況</div><div class="meta" style="margin-top:2px">點已回覆的據點可查看內容</div>${filterBarHTML(p.id)}${statusGridHTML(p.id)||`<div class="meta" style="margin-top:8px">沒有符合的據點</div>`}</div>
-    ${fs&&fr?`<div class="card" id="focusCard"><div class="row"><div class="grow section-h">${esc(fs.name)} 的回覆</div><button type="button" class="btn sm" id="focusClose">關閉</button></div><div style="margin-top:8px">${replyDetailHTML(p,fs,fr)}</div></div>`:""}
+    <div class="card"><div class="section-h">各據點回覆狀況</div><div class="meta" style="margin-top:2px">${S.canEdit?"點據點可查看內容；按「編輯」可直接修改文字與附件":"點已回覆的據點可查看內容；點本據點可直接回覆或編輯"}</div>${filterBarHTML(p.id)}${statusGridHTML(p.id)||`<div class="meta" style="margin-top:8px">沒有符合的據點</div>`}</div>
+    ${fs&&(fr||editing)?`<div class="card" id="focusCard"><div class="row"><div class="grow section-h">${esc(fs.name)} 的回覆${editing?(fr?"・編輯中":"・新增回覆"):""}</div><button type="button" class="btn sm" id="focusClose">關閉</button></div><div style="margin-top:8px">${editing?replyEditorHTML(p,fs,fr,d):replyDetailHTML(p,fs,fr)}</div></div>`:""}
     ${S.filter==="pending"?"":`<div class="card"><div class="section-h">回覆內容</div>
       ${replies.length?`<div class="reply-list" style="margin-top:8px">${replies.map(({s,r})=>`<div class="reply-item">${replyDetailHTML(p,s,r)}</div>`).join("")}</div>`:`<div class="meta" style="margin-top:6px">尚無回覆</div>`}
     </div>`}`;
-  document.getElementById("back").addEventListener("click",()=>{S.projectId=null;S.focusSite=null;S.filter="all";render();});
-  document.getElementById("focusClose")?.addEventListener("click",()=>{S.focusSite=null;render();});
+  document.getElementById("back").addEventListener("click",()=>{S.projectId=null;S.focusSite=null;S.editSite=null;S.filter="all";render();});
+  document.getElementById("focusClose")?.addEventListener("click",()=>{S.focusSite=null;S.editSite=null;render();});
+  app.querySelectorAll("[data-edit-reply]").forEach(b=>b.addEventListener("click",ev=>{ ev.stopPropagation(); startEdit(p.id,b.dataset.editReply); render(); document.getElementById("focusCard")?.scrollIntoView({behavior:"smooth",block:"start"}); }));
+  if(editing){
+    const ta=document.getElementById("dText"); ta.addEventListener("input",()=>{d.text=ta.value;});
+    const fi=document.getElementById("dFileInput");
+    document.getElementById("dAddFile").addEventListener("click",()=>fi.click());
+    fi.addEventListener("change",()=>handleFiles(fi.files,d,ekey,"dFileList","dUpMsg","dAddFile"));
+    bindRemove(d,"dFileList");
+    document.getElementById("dSave").addEventListener("click",async ev=>{ if(await saveReply(p,fs.code,d,ekey,ev.currentTarget)){ S.editSite=null; render(); } });
+    document.getElementById("dCancel").addEventListener("click",()=>{ delete S.draft[ekey]; S.editSite=null; if(!fr) S.focusSite=null; render(); });
+    document.getElementById("dDel")?.addEventListener("click",()=>{ document.getElementById("dDelConfirm").hidden=false; });
+    document.getElementById("dDelNo")?.addEventListener("click",()=>{ document.getElementById("dDelConfirm").hidden=true; });
+    document.getElementById("dDelYes")?.addEventListener("click",ev=>{ ev.currentTarget.disabled=true; deleteReply(p,fs.code); });
+  }
   bindFilter(p.id);
   document.getElementById("zipBtn")?.addEventListener("click",()=>downloadProjectZip(p));
 }
@@ -763,7 +816,7 @@ render();
   catch(e){ S.loadErr="Firebase 設定有誤："+esc(e.message); render(); return; }
   S.auth.onAuthStateChanged(user=>{
     S.unsub.forEach(f=>{try{f();}catch(e){}}); S.unsub=[];
-    Object.assign(S,{projects:[],replies:{},loaded:false,loadErr:null,draft:{},editingProject:null,store:null,acct:null,projectId:null,focusSite:null,filter:"all"});
+    Object.assign(S,{projects:[],replies:{},loaded:false,loadErr:null,draft:{},editingProject:null,store:null,acct:null,projectId:null,focusSite:null,editSite:null,filter:"all"});
     const code = user ? codeOf(user.email) : null;
     if(user && !code){ toastEl("這個帳號不是據點帳號，已登出"); S.auth.signOut(); return; }
     S.user=user||null; S.me=code; S.canEdit=(code===ADMIN_CODE);
