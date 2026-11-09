@@ -70,6 +70,7 @@ textarea{min-height:110px;resize:vertical}
 .cell .nm{font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .cell .st{font-size:11px;color:var(--muted)}
 .cell.ok .st{color:var(--ok)}
+.cell .rt{font-size:12px;color:var(--fg);line-height:1.4;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;overflow:hidden;word-break:break-word}
 .group-h{font-size:13px;color:var(--muted);font-weight:500;margin-top:6px;display:flex;justify-content:space-between}
 .files{display:flex;flex-wrap:wrap;gap:8px}
 .file{border:1px solid var(--line);border-radius:8px;overflow:hidden;width:96px;position:relative;background:var(--bg)}
@@ -473,12 +474,18 @@ function bindFilter(pid){
     try{ await navigator.clipboard.writeText(txt); toastEl("已複製未繳交名單"); }catch(e){ toastEl("無法複製，請手動選取"); }
   });
 }
+/* 總覽格子裡的回覆摘要：最多兩行，超過以「…」截斷，點進去看全文 */
+function replyPreviewHTML(r){
+  const t=String(r.text||"").replace(/\s+/g," ").trim();
+  if(t) return `<span class="rt" title="${esc(t)}">${esc(t)}</span>`;
+  return `<span class="st">${r.files&&r.files.length?`（僅附件 ${r.files.length} 件）`:"已回覆"}</span>`;
+}
 function statusGridHTML(pid){
   return SECTIONS.map(sec=>{
     const all=sec.list, done=all.filter(s=>S.replies[replyKey(pid,s.code)]).length, list=all.filter(s=>passFilter(pid,s));
     if(!list.length) return "";
     return `<div class="group-h"><span>${sec.label}</span><span>${done}/${all.length}</span></div>
-    <div class="grid">${list.map(s=>{const r=S.replies[replyKey(pid,s.code)];return `<div class="cell ${r?"ok":""}${S.focusSite===s.code&&S.view==="dash"?" focus":""}" ${r?`data-site-open="${s.code}" data-pid="${pid}" role="button" tabindex="0"`:""}>${showCode(s)?`<span class="code">${s.code}</span>`:""}<span class="nm">${esc(s.name)}</span><span class="st">${r?"已回覆 "+fmtDate(r.updatedAt):"未回覆"}</span></div>`;}).join("")}</div>`;
+    <div class="grid">${list.map(s=>{const r=S.replies[replyKey(pid,s.code)];return `<div class="cell ${r?"ok":""}${S.focusSite===s.code&&S.view==="dash"?" focus":""}" ${r?`data-site-open="${s.code}" data-pid="${pid}" role="button" tabindex="0"`:""}>${showCode(s)?`<span class="code">${s.code}</span>`:""}<span class="nm">${esc(s.name)}</span>${r?replyPreviewHTML(r):`<span class="st">未回覆</span>`}</div>`;}).join("")}</div>`;
   }).join("");
 }
 
