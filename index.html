@@ -95,6 +95,14 @@ textarea{min-height:110px;resize:vertical}
 .overdue{color:var(--warn);font-weight:500}
 .reply-list{display:flex;flex-direction:column;gap:8px}
 .reply-item{border-top:1px solid var(--line);padding-top:10px}
+.pathbox{font-family:var(--mono);font-size:13px;line-height:1.5;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px 10px;overflow-wrap:anywhere;word-break:break-all;user-select:all}
+.cell .fl{font-size:11px;color:var(--muted)}
+.field label.opt{display:flex;align-items:center;gap:8px;flex:1;min-width:220px;min-height:44px;border:1px solid var(--line);border-radius:8px;padding:8px 12px;font-size:15px;font-weight:400;color:var(--fg);cursor:pointer}
+.field label.opt input{flex:none;width:18px;height:18px;margin:0}
+.sh-row{display:flex;align-items:center;gap:8px;padding:4px 0}
+.sh-row span{flex:none;width:92px;font-size:13px}
+.sh-row input{min-height:36px;padding:6px 10px;font-family:var(--mono);font-size:13px}
+details>summary{cursor:pointer;font-size:14px;font-weight:500;padding:6px 0}
 code{font-family:var(--mono);font-size:13px;background:var(--bg);padding:1px 5px;border-radius:4px}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 </style>
@@ -170,6 +178,64 @@ const emailOf = code => code.toLowerCase()+"@"+ACCOUNT_DOMAIN;
 const codeOf = email => { const m=String(email||"").toLowerCase().match(/^([a-z0-9]+)@(.+)$/); if(!m||m[2]!==ACCOUNT_DOMAIN.toLowerCase()) return null; const c=m[1].toUpperCase(); return (c===ADMIN_CODE||siteByCode[c])?c:null; };
 const siteLabel = s => s ? (showCode(s)?`${s.code} ${s.name}`:s.name) : "";
 
+/* ---------- 公司共用資料夾 ----------
+   專案可以選擇據點的檔案要「上傳到網站（雲端）」或「放到公司共用資料夾」。
+   選共用資料夾時，各據點看到的路徑＝ 根目錄 \ 據點資料夾 \ 專案資料夾。
+   根目錄與各據點資料夾可在「管理 → 共用資料夾位置」修改（存成 projects/_share_config 這筆設定）；
+   下面是還沒修改前的預設值。 */
+const SHARE_CFG_ID = "_share_config";
+const SHARE_DEFAULT_ROOT = "\\\\10.90.118.182\\pstw 118.182\\9.全社共通\\RC2_總務環安\\外勤單位回拍資料";
+const SHARE_DIV = {SC:"北處",SD:"中處",SE:"南處"};
+function defaultShareRel(s){
+  if(!s) return "";
+  if(s.group==="服務站") return `服務\\${SHARE_DIV[s.code.slice(0,2)]}\\${s.code}${s.name}`;
+  if(s.code==="F01") return "五股";
+  if(s.code==="F02") return "中和";
+  return "";   // 營業所：尚未設定
+}
+const normRel  = v => String(v||"").trim().replace(/\//g,"\\").replace(/\\{2,}/g,"\\").replace(/^\\+|\\+$/g,"");
+const normRoot = v => String(v||"").trim().replace(/[\\\/]+$/,"");
+const shareRoot = () => normRoot(S.shareCfg?.root || SHARE_DEFAULT_ROOT);
+function shareRel(code){ const m=S.shareCfg?.paths; return normRel(m && Object.prototype.hasOwnProperty.call(m,code) ? m[code] : defaultShareRel(siteByCode[code])); }
+const isShare = p => !!p && p.storage==="share";
+const safeFolder = n => String(n||"").replace(/[\\/:*?"<>|\u0000-\u001f]/g,"_").replace(/[. ]+$/,"").trim().slice(0,80);
+const shareFolderOf = p => safeFolder(p.shareFolder||p.title);
+function sharePath(p,code){ const rel=shareRel(code); return rel ? `${shareRoot()}\\${rel}\\${shareFolderOf(p)}` : ""; }
+const shareSites = () => SITES.filter(s=>shareRel(s.code));
+const scanOf = (p,code) => p?.shareScan?.sites?.[code] || null;
+const hasShareFile = (p,code) => (scanOf(p,code)?.n||0) > 0;
+const shareFileCount = p => shareSites().filter(s=>hasShareFile(p,s.code)).length;
+function shareStatusText(p,code){
+  if(!shareRel(code)) return "未設定資料夾";
+  const x=scanOf(p,code); if(!p.shareScan||!x) return "尚未掃描";
+  if(x.e==="site") return "找不到據點資料夾";
+  if(x.e==="folder") return "尚未建立資料夾";
+  if(x.e) return "無法讀取";
+  return x.n ? `檔案 ${x.n} 件` : "尚未放檔案";
+}
+/* 路徑方塊＋複製按鈕。brief=true 時不顯示操作說明 */
+function sharePathHTML(p,code,brief){
+  const path=sharePath(p,code);
+  if(!path) return `<div class="meta">此據點尚未設定共用資料夾位置，請洽管理者。</div>`;
+  const x=scanOf(p,code);
+  const st = p.shareScan&&x ? `${fmtDate(p.shareScan.at)} 掃描：${esc(shareStatusText(p,code))}${x.t?`（最新 ${fmtDate(x.t)}）`:""}` : "";
+  return `<div class="pathbox">${esc(path)}</div>
+    <div class="row" style="margin-top:6px"><button type="button" class="btn sm" data-copy-path="${esc(path)}">複製路徑</button><span class="meta grow">${st}</span></div>
+    ${brief?"":`<div class="meta" style="margin-top:6px">請用公司電腦開啟「檔案總管」，把路徑貼到上方的網址列後按 Enter，再把檔案放進這個資料夾。手機無法連到共用資料夾。</div>`}`;
+}
+function shareFieldHTML(p,code,d,listId){
+  return `<div class="field"><label>檔案繳交位置（公司共用資料夾）</label>${sharePathHTML(p,code)}</div>
+    ${d.files.length?`<div class="field"><label>先前在網站上傳的附件</label><div id="${listId}">${filesHTML(d.files,true)}</div></div>`:""}`;
+}
+function replyAttachHTML(p,code,r){
+  const cloud = (!isShare(p) || (r.files&&r.files.length) || r.filesClearedAt) ? replyFilesHTML(r) : "";
+  return cloud + (isShare(p)?`<div style="margin-top:6px">${sharePathHTML(p,code,true)}</div>`:"");
+}
+function shareCellHTML(p,code){
+  if(!isShare(p) || !p.shareScan || !shareRel(code)) return "";
+  return `<span class="fl">${hasShareFile(p,code)?"✓ ":"－ "}${esc(shareStatusText(p,code))}</span>`;
+}
+
 /* ---------- 狀態 ---------- */
 const S = {
   view:"home", projectId:null, site:null,
@@ -177,6 +243,7 @@ const S = {
   canEdit:false, fileCache:{},
   projects:[], replies:{}, loaded:false, loadErr:null,
   draft:{}, uploading:false, editingProject:null, acct:null,
+  shareCfg:null, shareDraft:null, scan:null, autoScan:null, rootHandle:null,
   store:null, clearing:null, orphanJob:null, orphConfirm:false, focusSite:null, editSite:null, zipping:null, filter:"all"
 };
 const LS = { get:k=>{try{return localStorage.getItem(k);}catch(e){return null;}}, set:(k,v)=>{try{localStorage.setItem(k,v);}catch(e){}}, del:k=>{try{localStorage.removeItem(k);}catch(e){}} };
@@ -357,7 +424,7 @@ function projectCardHTML(p, opts={}){
   const dl = p.deadline ? `<span class="${isOverdue(p)?"overdue":""}">期限 ${esc(p.deadline)}${isOverdue(p)?"（已逾期）":""}</span>` : "";
   return `<div class="card clickable" data-pid="${p.id}">
     <div class="row"><div class="grow title">${esc(p.title)}</div>${opts.noMine?"":status}</div>
-    <div class="row meta" style="margin-top:6px"><span>${dl}</span><span>回覆 ${done}/${total}</span></div>
+    <div class="row meta" style="margin-top:6px"><span>${dl}</span><span>${isShare(p)?"共用資料夾 · ":""}回覆 ${done}/${total}${isShare(p)&&p.shareScan?` · 已放檔 ${shareFileCount(p)}/${shareSites().length}`:""}</span></div>
     <div class="bar" style="margin-top:8px"><i style="width:${Math.round(done/total*100)}%"></i></div>
   </div>`;
 }
@@ -403,6 +470,13 @@ async function fileURL(id,type){
   const url=URL.createObjectURL(new Blob(parts,{type:t||type}));
   S.fileCache[id]=url; return url;
 }
+/* 複製共用資料夾路徑 */
+app.addEventListener("click",async ev=>{
+  const b=ev.target.closest("[data-copy-path]"); if(!b) return; ev.preventDefault(); ev.stopPropagation();
+  const t=b.dataset.copyPath;
+  try{ await navigator.clipboard.writeText(t); toastEl("已複製路徑，請貼到檔案總管的網址列"); }
+  catch(e){ const r=document.createRange(), box=b.closest(".row")?.previousElementSibling; if(box){ r.selectNodeContents(box); const sel=getSelection(); sel.removeAllRanges(); sel.addRange(r); } toastEl("請長按或按 Ctrl+C 複製已選取的路徑"); }
+});
 /* 點儀表板上已回覆的據點 → 顯示該站回覆明細 */
 app.addEventListener("click",ev=>{
   const c=ev.target.closest("[data-site-open]"); if(!c) return;
@@ -432,16 +506,16 @@ function renderProject(){
       ${canReply?`
       <div class="form" style="margin-top:10px">
         <div class="field"><label for="replyText">回覆內容</label><textarea id="replyText" placeholder="請填寫本據點的確認結果或說明">${esc(d.text)}</textarea></div>
-        <div class="field"><label>附件（照片或 PDF）</label>
+        ${isShare(p)?shareFieldHTML(p,S.site,d,"fileList"):`<div class="field"><label>附件（照片或 PDF）</label>
           <div id="fileList">${filesHTML(d.files,true)}</div>
           <div class="row">
             <input type="file" id="fileInput" accept="image/*,application/pdf" multiple hidden>
             <button type="button" class="btn sm" id="addFile">＋ 加入檔案</button>
             <span class="meta grow" id="upMsg" style="overflow-wrap:anywhere"></span>
           </div>
-        </div>
+        </div>`}
         <div class="row"><button type="button" class="btn primary grow" id="submitReply">${r?"更新回覆":"送出回覆"}</button></div>
-      </div>`:`<div class="body-text" style="margin-top:8px">${r?esc(r.text):"<span class='meta'>本據點未回覆，專案已結案。</span>"}</div>${r?`<div style="margin-top:8px">${replyFilesHTML(r)}</div>`:""}`}
+      </div>`:`<div class="body-text" style="margin-top:8px">${r?esc(r.text):"<span class='meta'>本據點未回覆，專案已結案。</span>"}</div>${r?`<div style="margin-top:8px">${replyAttachHTML(p,S.site,r)}</div>`:""}`}
     </div>
     <div class="card">
       <div class="section-h">各據點回覆狀況</div>
@@ -451,8 +525,8 @@ function renderProject(){
   if(!canReply) return;
   const ta=document.getElementById("replyText"); ta.addEventListener("input",()=>{d.text=ta.value;});
   const fi=document.getElementById("fileInput");
-  document.getElementById("addFile").addEventListener("click",()=>fi.click());
-  fi.addEventListener("change",()=>handleFiles(fi.files,d,key,"fileList","upMsg","addFile"));
+  if(fi){ document.getElementById("addFile").addEventListener("click",()=>fi.click());
+    fi.addEventListener("change",()=>handleFiles(fi.files,d,key,"fileList","upMsg","addFile")); }
   bindRemove(d,"fileList");
   document.getElementById("submitReply").addEventListener("click",()=>submitReply(p,d,key));
 }
@@ -519,7 +593,7 @@ async function submitReply(p,d,key){ await saveReply(p,S.site,d,key,document.get
 /* 儲存某據點的回覆；管理者存檔時順便刪掉被移除的舊附件（據點帳號沒有刪除權限，舊檔留給「儲存空間」清理） */
 async function saveReply(p,code,d,key,btn){
   if(S.uploading){toastEl("檔案還在上傳中");return false;}
-  if(!d.text.trim() && !d.files.length){toastEl("請填寫回覆內容或加入附件");return false;}
+  if(!d.text.trim() && !d.files.length){toastEl(isShare(p)?"請填寫回覆內容（例如：檔案已放入共用資料夾）":"請填寫回覆內容或加入附件");return false;}
   if(btn) btn.disabled=true;
   const oldFiles=(S.replies[key]?.files)||[];
   try{
@@ -547,17 +621,27 @@ function startEdit(pid,code){
   S.focusSite=code; S.editSite=code;
 }
 
-function passFilter(pid,s){ const r=!!S.replies[replyKey(pid,s.code)]; return S.view!=="dash" || S.filter==="all" || (S.filter==="pending"?!r:r); }
+const noFileSites = p => shareSites().filter(s=>!hasShareFile(p,s.code));
+function passFilter(pid,s){
+  if(S.view!=="dash" || S.filter==="all") return true;
+  if(S.filter==="nofile"){ const p=S.projects.find(x=>x.id===pid); return !!shareRel(s.code) && !hasShareFile(p,s.code); }
+  const r=!!S.replies[replyKey(pid,s.code)]; return S.filter==="pending"?!r:r;
+}
 function filterBarHTML(pid){
+  const p=S.projects.find(x=>x.id===pid), sh=isShare(p);
   const pending=SITES.filter(s=>!S.replies[replyKey(pid,s.code)]).length;
   const btn=(k,t)=>`<button type="button" class="btn sm" data-filter="${k}" aria-pressed="${S.filter===k}" style="${S.filter===k?"background:var(--accent);color:var(--accent-fg);border-color:var(--accent)":""}">${t}</button>`;
-  return `<div class="row" style="margin-top:8px">${btn("all","全部")}${btn("pending",`尚未繳交 ${pending}`)}${btn("done",`已繳交 ${SITES.length-pending}`)}${S.filter==="pending"&&pending?`<button type="button" class="btn sm" id="copyPending">複製未繳交名單</button>`:""}</div>`;
+  const nofile = sh&&p.shareScan ? noFileSites(p).length : null;
+  const canCopy = (S.filter==="pending"&&pending) || (S.filter==="nofile"&&nofile);
+  return `<div class="row" style="margin-top:8px">${btn("all","全部")}${btn("pending",`${sh?"尚未回覆":"尚未繳交"} ${pending}`)}${btn("done",`${sh?"已回覆":"已繳交"} ${SITES.length-pending}`)}${nofile!=null?btn("nofile",`尚未放檔案 ${nofile}`):""}${canCopy?`<button type="button" class="btn sm" id="copyPending">複製${S.filter==="nofile"?"未放檔案":sh?"未回覆":"未繳交"}名單</button>`:""}</div>`;
 }
 function bindFilter(pid){
   app.querySelectorAll("[data-filter]").forEach(b=>b.addEventListener("click",()=>{ S.filter=b.dataset.filter; render(); }));
   document.getElementById("copyPending")?.addEventListener("click",async()=>{
-    const txt=SECTIONS.map(sec=>{ const l=sec.list.filter(s=>!S.replies[replyKey(pid,s.code)]); return l.length?`【${sec.label}】${l.map(s=>s.name).join("、")}`:""; }).filter(Boolean).join("\n");
-    try{ await navigator.clipboard.writeText(txt); toastEl("已複製未繳交名單"); }catch(e){ toastEl("無法複製，請手動選取"); }
+    const p=S.projects.find(x=>x.id===pid), nf=S.filter==="nofile";
+    const miss = s => nf ? (!!shareRel(s.code) && !hasShareFile(p,s.code)) : !S.replies[replyKey(pid,s.code)];
+    const txt=SECTIONS.map(sec=>{ const l=sec.list.filter(miss); return l.length?`【${sec.label}】${l.map(s=>s.name).join("、")}`:""; }).filter(Boolean).join("\n");
+    try{ await navigator.clipboard.writeText(txt); toastEl("已複製名單"); }catch(e){ toastEl("無法複製，請手動選取"); }
   });
 }
 /* 總覽格子裡的回覆摘要：最多兩行，超過以「…」截斷，點進去看全文 */
@@ -572,7 +656,7 @@ function statusGridHTML(pid){
     const all=sec.list, done=all.filter(s=>S.replies[replyKey(pid,s.code)]).length, list=all.filter(s=>passFilter(pid,s));
     if(!list.length) return "";
     return `<div class="group-h"><span>${sec.label}</span><span>${done}/${all.length}</span></div>
-    <div class="grid">${list.map(s=>{const r=S.replies[replyKey(pid,s.code)];const ed=!!p&&canEditReply(p,s.code);return `<div class="cell ${r?"ok":ed?"can":""}${S.focusSite===s.code&&S.view==="dash"?" focus":""}" ${r||ed?`data-site-open="${s.code}" data-pid="${pid}" role="button" tabindex="0"`:""}>${showCode(s)?`<span class="code">${s.code}</span>`:""}<span class="nm">${esc(s.name)}</span>${r?replyPreviewHTML(r):`<span class="st">${ed&&!S.canEdit?"未回覆・點此回覆":"未回覆"}</span>`}</div>`;}).join("")}</div>`;
+    <div class="grid">${list.map(s=>{const r=S.replies[replyKey(pid,s.code)];const ed=!!p&&canEditReply(p,s.code);return `<div class="cell ${r?"ok":ed?"can":""}${S.focusSite===s.code&&S.view==="dash"?" focus":""}" ${r||ed?`data-site-open="${s.code}" data-pid="${pid}" role="button" tabindex="0"`:""}>${showCode(s)?`<span class="code">${s.code}</span>`:""}<span class="nm">${esc(s.name)}</span>${r?replyPreviewHTML(r):`<span class="st">${ed&&!S.canEdit?"未回覆・點此回覆":"未回覆"}</span>`}${shareCellHTML(p,s.code)}</div>`;}).join("")}</div>`;
   }).join("");
 }
 
@@ -586,14 +670,14 @@ function canSeeFiles(code){ return S.canEdit || code===S.site; }
 function replyDetailHTML(p,s,r){
   return `<div class="row"><b>${esc(s.name)}</b><span class="meta grow">${showCode(s)?s.code+" · ":""}${fmtDate(r.updatedAt)}</span>${canEditReply(p,s.code)&&!(S.editSite===s.code)?`<button type="button" class="btn sm" data-edit-reply="${s.code}">編輯</button>`:""}</div>
     <div class="body-text">${esc(r.text)||"<span class='meta'>（僅附件）</span>"}</div>
-    ${canSeeFiles(s.code)?`<div style="margin-top:6px">${replyFilesHTML(r)}</div>`:(r.files&&r.files.length?`<div class="meta">附件 ${r.files.length} 件（登入「管理」後可檢視）</div>`:"")}`;
+    ${canSeeFiles(s.code)?`<div style="margin-top:6px">${replyAttachHTML(p,s.code,r)}</div>`:((r.files&&r.files.length?`<div class="meta">附件 ${r.files.length} 件（登入「管理」後可檢視）</div>`:"")+(isShare(p)&&p.shareScan&&shareRel(s.code)?`<div class="meta">共用資料夾：${esc(shareStatusText(p,s.code))}</div>`:""))}`;
 }
 function replyEditorHTML(p,s,r,d){
   const n=(r?.files||[]).length;
   return `<div class="form">
     <div class="field"><label for="dText">回覆內容</label><textarea id="dText" placeholder="請填寫${esc(s.name)}的確認結果或說明">${esc(d.text)}</textarea></div>
-    <div class="field"><label>附件（照片或 PDF）</label><div id="dFileList">${filesHTML(d.files,true)}</div>
-      <div class="row"><input type="file" id="dFileInput" accept="image/*,application/pdf" multiple hidden><button type="button" class="btn sm" id="dAddFile">＋ 加入檔案</button><span class="meta" id="dUpMsg"></span></div></div>
+    ${isShare(p)?shareFieldHTML(p,s.code,d,"dFileList"):`<div class="field"><label>附件（照片或 PDF）</label><div id="dFileList">${filesHTML(d.files,true)}</div>
+      <div class="row"><input type="file" id="dFileInput" accept="image/*,application/pdf" multiple hidden><button type="button" class="btn sm" id="dAddFile">＋ 加入檔案</button><span class="meta" id="dUpMsg"></span></div></div>`}
     <div class="row"><button type="button" class="btn primary grow" id="dSave">${r?"儲存修改":"送出回覆"}</button><button type="button" class="btn" id="dCancel">取消</button></div>
     ${S.canEdit&&r?`<div class="row"><button type="button" class="btn sm danger" id="dDel">刪除此回覆</button></div>
     <div id="dDelConfirm" hidden class="notice">將刪除${esc(s.name)}的回覆${n?`與 ${n} 個附件`:""}，<span class="overdue">刪除後無法復原。</span>
@@ -603,7 +687,9 @@ function replyEditorHTML(p,s,r,d){
 function renderDashProject(){
   const p=S.projects.find(x=>x.id===S.projectId); if(!p){S.projectId=null;return renderDash();}
   const done=countReplies(p.id), total=SITES.length;
-  const replies = (S.filter==="pending"?[]:SITES.map(s=>({s,r:S.replies[replyKey(p.id,s.code)]})).filter(x=>x.r)).sort((a,b)=>(b.r.updatedAt||"").localeCompare(a.r.updatedAt||""));
+  if(S.filter==="nofile" && !(isShare(p)&&p.shareScan)) S.filter="all";
+  const listOnly = S.filter==="pending" || S.filter==="nofile";
+  const replies = (listOnly?[]:SITES.map(s=>({s,r:S.replies[replyKey(p.id,s.code)]})).filter(x=>x.r)).sort((a,b)=>(b.r.updatedAt||"").localeCompare(a.r.updatedAt||""));
   const fs=S.focusSite?siteByCode[S.focusSite]:null, fr=fs?S.replies[replyKey(p.id,fs.code)]:null;
   const editing=!!fs && S.editSite===fs.code && canEditReply(p,fs.code), ekey=fs?replyKey(p.id,fs.code):null;
   const d=editing?(S.draft[ekey]||(S.draft[ekey]={text:fr?.text||"",files:[...(fr?.files||[])]})):null;
@@ -612,13 +698,14 @@ function renderDashProject(){
     <button type="button" class="back" id="back">‹ 返回儀表板</button>
     <div class="card">
       <div class="row"><div class="grow title" style="font-size:18px">${esc(p.title)}</div>${p.status==="closed"?`<span class="pill closed">已結案</span>`:""}</div>
-      <div class="meta" style="margin-top:4px">${p.deadline?`期限 <span class="${isOverdue(p)?"overdue":""}">${esc(p.deadline)}</span> · `:""}已回覆 ${done}/${total}</div>
+      <div class="meta" style="margin-top:4px">${p.deadline?`期限 <span class="${isOverdue(p)?"overdue":""}">${esc(p.deadline)}</span> · `:""}已回覆 ${done}/${total}${isShare(p)&&p.shareScan?` · 已放檔 ${shareFileCount(p)}/${shareSites().length}`:""}</div>
       <div class="bar" style="margin-top:8px"><i style="width:${Math.round(done/total*100)}%"></i></div>
       ${S.canEdit?`<div class="row" style="margin-top:10px"><button type="button" class="btn sm" id="zipBtn" ${z?"disabled":""}>${z?`打包中 ${z.done}/${z.total}…`:"打包下載全部內容（ZIP）"}</button><span class="meta">公告、附件、各據點回覆與回覆總表</span></div>`:""}
     </div>
     <div class="card"><div class="section-h">各據點回覆狀況</div><div class="meta" style="margin-top:2px">${S.canEdit?"點據點可查看內容；按「編輯」可直接修改文字與附件":"點已回覆的據點可查看內容；點本據點可直接回覆或編輯"}</div>${filterBarHTML(p.id)}${statusGridHTML(p.id)||`<div class="meta" style="margin-top:8px">沒有符合的據點</div>`}</div>
+    ${isShare(p)?shareScanCardHTML(p):""}
     ${fs&&(fr||editing)?`<div class="card" id="focusCard"><div class="row"><div class="grow section-h">${esc(fs.name)} 的回覆${editing?(fr?"・編輯中":"・新增回覆"):""}</div><button type="button" class="btn sm" id="focusClose">關閉</button></div><div style="margin-top:8px">${editing?replyEditorHTML(p,fs,fr,d):replyDetailHTML(p,fs,fr)}</div></div>`:""}
-    ${S.filter==="pending"?"":`<div class="card"><div class="section-h">回覆內容</div>
+    ${listOnly?"":`<div class="card"><div class="section-h">回覆內容</div>
       ${replies.length?`<div class="reply-list" style="margin-top:8px">${replies.map(({s,r})=>`<div class="reply-item">${replyDetailHTML(p,s,r)}</div>`).join("")}</div>`:`<div class="meta" style="margin-top:6px">尚無回覆</div>`}
     </div>`}`;
   document.getElementById("back").addEventListener("click",()=>{S.projectId=null;S.focusSite=null;S.editSite=null;S.filter="all";render();});
@@ -627,8 +714,8 @@ function renderDashProject(){
   if(editing){
     const ta=document.getElementById("dText"); ta.addEventListener("input",()=>{d.text=ta.value;});
     const fi=document.getElementById("dFileInput");
-    document.getElementById("dAddFile").addEventListener("click",()=>fi.click());
-    fi.addEventListener("change",()=>handleFiles(fi.files,d,ekey,"dFileList","dUpMsg","dAddFile"));
+    if(fi){ document.getElementById("dAddFile").addEventListener("click",()=>fi.click());
+      fi.addEventListener("change",()=>handleFiles(fi.files,d,ekey,"dFileList","dUpMsg","dAddFile")); }
     bindRemove(d,"dFileList");
     document.getElementById("dSave").addEventListener("click",async ev=>{ if(await saveReply(p,fs.code,d,ekey,ev.currentTarget)){ S.editSite=null; render(); } });
     document.getElementById("dCancel").addEventListener("click",()=>{ delete S.draft[ekey]; S.editSite=null; if(!fr) S.focusSite=null; render(); });
@@ -636,7 +723,7 @@ function renderDashProject(){
     document.getElementById("dDelNo")?.addEventListener("click",()=>{ document.getElementById("dDelConfirm").hidden=true; });
     document.getElementById("dDelYes")?.addEventListener("click",ev=>{ ev.currentTarget.disabled=true; deleteReply(p,fs.code); });
   }
-  bindFilter(p.id);
+  bindFilter(p.id); bindShareScan(p);
   document.getElementById("zipBtn")?.addEventListener("click",()=>downloadProjectZip(p));
 }
 
@@ -654,15 +741,16 @@ async function downloadProjectZip(p){
   try{
     const JSZip=await loadJSZip(); const zip=new JSZip(); const root=zip.folder(safeName(p.title));
     const statusTxt = p.status==="closed"?"已結案":"進行中";
-    root.file("公告.txt",`專案名稱：${p.title}\n狀態：${statusTxt}\n回覆期限：${p.deadline||"無"}\n發布時間：${p.createdAt?new Date(p.createdAt).toLocaleString("zh-TW"):""}\n\n${p.body||""}\n`);
+    root.file("公告.txt",`專案名稱：${p.title}\n狀態：${statusTxt}\n回覆期限：${p.deadline||"無"}\n據點檔案存放位置：${isShare(p)?"公司共用資料夾（各據點資料夾\\"+shareFolderOf(p)+"）":"雲端（網站上傳）"}\n發布時間：${p.createdAt?new Date(p.createdAt).toLocaleString("zh-TW"):""}\n\n${p.body||""}\n`);
     const addFiles=async(folder,list)=>{ let i=0; for(const f of list){ i++; try{ const {parts}=await fileBytes(f.id); folder.file(`${String(i).padStart(2,"0")}_${safeName(f.name)}`,new Blob(parts)); }catch(e){ folder.file(`${String(i).padStart(2,"0")}_${safeName(f.name)}.讀取失敗.txt`,"此附件已無法讀取"); } tick(); } };
     if(p.files&&p.files.length) await addFiles(root.folder("公告附件"),p.files);
-    const rows=[["據點代碼","據點","類別","狀態","回覆時間","回覆內容","附件數"]];
+    const sh=isShare(p), shCols = s => sh ? [shareRel(s.code)?shareStatusText(p,s.code):"", sharePath(p,s.code)] : [];
+    const rows=[["據點代碼","據點","類別","狀態","回覆時間","回覆內容","附件數",...(sh?["共用資料夾狀況"+(p.shareScan?`（${new Date(p.shareScan.at).toLocaleString("zh-TW")} 掃描）`:""),"共用資料夾路徑"]:[])]];
     const rf=root.folder("各據點回覆");
     for(const s of SITES){
       const r=S.replies[replyKey(p.id,s.code)];
-      if(!r){ rows.push([s.code,s.name,s.group,"未回覆","","",0]); continue; }
-      rows.push([s.code,s.name,s.group,"已回覆",r.updatedAt?new Date(r.updatedAt).toLocaleString("zh-TW"):"",r.text||"",(r.files||[]).length]);
+      if(!r){ rows.push([s.code,s.name,s.group,"未回覆","","",0,...shCols(s)]); continue; }
+      rows.push([s.code,s.name,s.group,"已回覆",r.updatedAt?new Date(r.updatedAt).toLocaleString("zh-TW"):"",r.text||"",(r.files||[]).length,...shCols(s)]);
       const sf=rf.folder(safeName(`${s.code}_${s.name}`));
       sf.file("回覆內容.txt",`據點：${s.name}（${s.code}）\n回覆時間：${r.updatedAt?new Date(r.updatedAt).toLocaleString("zh-TW"):""}\n\n${r.text||"（僅附件）"}\n`);
       if(r.files&&r.files.length) await addFiles(sf,r.files);
@@ -684,6 +772,15 @@ function renderAdmin(){
     <div class="field"><label for="pTitle">專案名稱</label><input type="text" id="pTitle" placeholder="例：全省消防檢修資料確認" value="${esc(e?.title||"")}"></div>
     <div class="field"><label for="pBody">公告內容</label><textarea id="pBody" placeholder="說明要各據點確認或回覆的事項">${esc(e?.body||"")}</textarea></div>
     <div class="field"><label for="pDeadline">回覆期限（可留空）</label><input type="date" id="pDeadline" value="${esc(e?.deadline||"")}"></div>
+    <div class="field"><label>據點繳交檔案的存放位置</label>
+      <div class="row">
+        <label class="opt"><input type="radio" name="pStorage" value="cloud" ${e?.storage==="share"?"":"checked"}>雲端（在網站上傳，手機可用）</label>
+        <label class="opt"><input type="radio" name="pStorage" value="share" ${e?.storage==="share"?"checked":""}>公司共用資料夾（不佔網站空間，需用公司電腦）</label>
+      </div>
+    </div>
+    ${e?.storage==="share"?`<div class="field"><label for="pFolder">專案資料夾名稱（會建立在各據點的資料夾底下）</label><input type="text" id="pFolder" value="${esc(e.shareFolder||safeFolder(e.title))}" placeholder="預設與專案名稱相同">
+      <div class="meta">各據點會看到自己的路徑，例如桃園站：</div><div class="pathbox" id="pFolderEx"></div>
+      <div class="meta">據點仍在網站上填寫文字回覆；檔案放到共用資料夾後，到「儀表板」按「掃描共用資料夾」即可看到誰還沒放。</div></div>`:""}
     <div class="field"><label>公告附件</label><div id="pFileList">${filesHTML(e?.files||[],true)}</div>
       <div class="row"><input type="file" id="pFileInput" accept="image/*,application/pdf" multiple hidden><button type="button" class="btn sm" id="pAddFile">＋ 加入檔案</button><span class="meta" id="pUpMsg"></span></div></div>
     <div class="row"><button type="button" class="btn primary grow" id="pSave">${e&&e.id?"儲存變更":"發布公告"}</button>${e&&e.id?`<button type="button" class="btn" id="pCancel">取消</button>`:""}</div>
@@ -693,15 +790,21 @@ function renderAdmin(){
     const fileMeta = st.count ? ` · 附件 ${st.count} 件（${fmtSize(st.bytes)}）` : (p.filesClearedAt?" · 附件已清除":"");
     const canClear = p.status==="closed" && st.count>0;
     return `<div class="card"><div class="row"><div class="grow title">${esc(p.title)}</div>${p.status==="closed"?`<span class="pill closed">已結案</span>`:`<span class="pill ok">進行中</span>`}</div>
-    <div class="meta" style="margin-top:4px">${p.deadline?"期限 "+esc(p.deadline)+" · ":""}回覆 ${countReplies(p.id)}/${SITES.length}${fileMeta}</div>
+    <div class="meta" style="margin-top:4px">${isShare(p)?"檔案放共用資料夾 · ":""}${p.deadline?"期限 "+esc(p.deadline)+" · ":""}回覆 ${countReplies(p.id)}/${SITES.length}${fileMeta}</div>
     <div class="row" style="margin-top:10px"><button type="button" class="btn sm" data-edit="${p.id}">編輯</button><button type="button" class="btn sm" data-toggle="${p.id}">${p.status==="closed"?"重新開放":"結案"}</button>${canClear?`<button type="button" class="btn sm" data-clear="${p.id}" ${S.clearing?"disabled":""}>清除附件</button>`:""}<button type="button" class="btn sm danger" data-del="${p.id}" ${busy?"disabled":""}>刪除</button></div>
     ${busy?`<div class="notice" style="margin-top:8px" id="clr-prog">清除中 ${S.clearing.done}/${S.clearing.total}…</div>`:""}
     ${canClear&&!busy?`<div id="clrc-${p.id}" hidden class="notice" style="margin-top:8px">將永久刪除此專案的 ${st.count} 個附件（${fmtSize(st.bytes)}），包含公告附件與各據點回覆的照片、PDF；文字回覆會保留。<span class="overdue">刪除後無法復原。</span><div class="row" style="margin-top:8px"><button type="button" class="btn sm danger" data-clear-yes="${p.id}">確定清除</button><button type="button" class="btn sm" data-clear-no="${p.id}">取消</button></div></div>`:""}
     <div id="confirm-${p.id}" hidden class="notice" style="margin-top:8px">確定要刪除此專案、所有回覆及附件？ <button type="button" class="btn sm danger" data-del-yes="${p.id}">確定刪除</button></div></div>`;
   }).join("");
-  app.innerHTML = form + `<div class="card" id="acctBox">${acctInner()}</div>` + `<div class="card" id="storageBox">${storageInner()}</div>` + `<div class="section-h">所有專案</div>` + (list||`<div class="card empty">尚無專案</div>`);
-  bindStorage(); bindAcct();
+  app.innerHTML = form + `<div class="card" id="shareBox">${shareCfgInner()}</div>` + `<div class="card" id="acctBox">${acctInner()}</div>` + `<div class="card" id="storageBox">${storageInner()}</div>` + `<div class="section-h">所有專案</div>` + (list||`<div class="card empty">尚無專案</div>`);
+  bindStorage(); bindAcct(); bindShareCfg();
   const d = S.editingProject || (S.editingProject={files:[]}); d.files=d.files||[];
+  const exEl=document.getElementById("pFolderEx"), fEl=document.getElementById("pFolder");
+  const showEx=()=>{ if(exEl) exEl.textContent=`${shareRoot()}\\${shareRel("SD0")||"（據點資料夾）"}\\${safeFolder(fEl.value)||safeFolder(d.title)||"（專案資料夾）"}`; };
+  showEx();
+  fEl?.addEventListener("input",()=>{ d.shareFolder=fEl.value; d.folderTouched=true; showEx(); });
+  document.getElementById("pTitle").addEventListener("input",ev=>{ if(fEl && !d.folderTouched){ fEl.value=safeFolder(ev.target.value); d.shareFolder=fEl.value; showEx(); } });
+  app.querySelectorAll('input[name="pStorage"]').forEach(r=>r.addEventListener("change",()=>{ d.storage=r.value; if(r.value==="share" && !d.folderTouched) d.shareFolder=safeFolder(d.title); render(); }));
   const fi=document.getElementById("pFileInput");
   document.getElementById("pAddFile").addEventListener("click",()=>fi.click());
   fi.addEventListener("change",()=>handleFiles(fi.files,d,null,"pFileList","pUpMsg","pAddFile"));
@@ -711,15 +814,18 @@ function renderAdmin(){
     if(S.uploading){toastEl("檔案還在上傳中");return;}
     const title=document.getElementById("pTitle").value.trim(), body=document.getElementById("pBody").value.trim(), deadline=document.getElementById("pDeadline").value;
     if(!title){toastEl("請輸入專案名稱");return;}
+    const storage = d.storage==="share"?"share":"cloud";
+    const shareFolder = storage==="share" ? (safeFolder(document.getElementById("pFolder")?.value)||safeFolder(title)) : (d.shareFolder||"");
+    if(storage==="share" && !shareFolder){toastEl("請輸入專案資料夾名稱");return;}
     const btn=document.getElementById("pSave"); btn.disabled=true;
     try{
-      if(d.id){ await S.db.collection("projects").doc(d.id).update({title,body,deadline,files:d.files}); toastEl("已儲存"); }
-      else { await S.db.collection("projects").add({title,body,deadline,files:d.files,status:"open",createdAt:new Date().toISOString()}); toastEl("已發布"); }
+      if(d.id){ await S.db.collection("projects").doc(d.id).update({title,body,deadline,files:d.files,storage,shareFolder}); toastEl("已儲存"); }
+      else { await S.db.collection("projects").add({title,body,deadline,files:d.files,storage,shareFolder,status:"open",createdAt:new Date().toISOString()}); toastEl("已發布"); }
       S.editingProject=null; render();
     }catch(e){ toastEl("儲存失敗，請再試一次"); btn.disabled=false; }
   });
   document.getElementById("pCancel")?.addEventListener("click",()=>{S.editingProject=null;render();});
-  app.querySelectorAll("[data-edit]").forEach(b=>b.addEventListener("click",()=>{ const p=S.projects.find(x=>x.id===b.dataset.edit); S.editingProject={id:p.id,title:p.title,body:p.body,deadline:p.deadline||"",files:[...(p.files||[])]}; render(); window.scrollTo({top:0}); }));
+  app.querySelectorAll("[data-edit]").forEach(b=>b.addEventListener("click",()=>{ const p=S.projects.find(x=>x.id===b.dataset.edit); S.editingProject={id:p.id,title:p.title,body:p.body,deadline:p.deadline||"",files:[...(p.files||[])],storage:p.storage||"cloud",shareFolder:p.shareFolder||"",folderTouched:!!p.shareFolder}; render(); window.scrollTo({top:0}); }));
   app.querySelectorAll("[data-toggle]").forEach(b=>b.addEventListener("click",async()=>{ const p=S.projects.find(x=>x.id===b.dataset.toggle); try{ await S.db.collection("projects").doc(p.id).update({status:p.status==="closed"?"open":"closed"}); }catch(e){toastEl("更新失敗");} }));
   app.querySelectorAll("[data-del]").forEach(b=>b.addEventListener("click",()=>{ document.getElementById("confirm-"+b.dataset.del).hidden=false; }));
   app.querySelectorAll("[data-del-yes]").forEach(b=>b.addEventListener("click",async()=>{ const pid=b.dataset.delYes; b.disabled=true;
@@ -734,6 +840,115 @@ function renderAdmin(){
   app.querySelectorAll("[data-clear-no]").forEach(b=>b.addEventListener("click",()=>{ const el=document.getElementById("clrc-"+b.dataset.clearNo); if(el) el.hidden=true; }));
   app.querySelectorAll("[data-clear-yes]").forEach(b=>b.addEventListener("click",()=>{ b.disabled=true; clearProjectFiles(b.dataset.clearYes); }));
   if(!S.store || (!S.store.loading && Date.now()-(S.store.at||0)>60000)) loadStorage();
+}
+
+/* ---------- 共用資料夾位置設定（管理） ---------- */
+function shareDraft(){
+  if(!S.shareDraft) S.shareDraft={root:shareRoot(), paths:Object.fromEntries(SITES.map(s=>[s.code,shareRel(s.code)])), open:false};
+  return S.shareDraft;
+}
+function shareCfgInner(){
+  const d=shareDraft(), unset=SITES.filter(s=>!normRel(d.paths[s.code])).length;
+  return `<div class="section-h">共用資料夾位置</div>
+    <div class="meta" style="margin-top:4px">選擇「公司共用資料夾」的專案，各據點看到的路徑＝ 根目錄 \\ 據點資料夾 \\ 專案資料夾。沒有填資料夾的據點不列入放檔案的統計。</div>
+    <div class="form" style="margin-top:10px">
+      <div class="field"><label for="shRoot">根目錄</label><input type="text" id="shRoot" value="${esc(d.root)}" style="font-family:var(--mono);font-size:13px"></div>
+      <details id="shDetails" ${d.open?"open":""}><summary>各據點資料夾（已設定 ${SITES.length-unset} 個${unset?`，未設定 ${unset} 個`:""}）</summary>
+        ${SECTIONS.map(sec=>`<div class="group-h"><span>${sec.label}</span></div>${sec.list.map(s=>`<div class="sh-row"><span>${esc(siteLabel(s))}</span><input type="text" data-sh="${s.code}" value="${esc(d.paths[s.code]||"")}" placeholder="未設定" aria-label="${esc(s.name)}的資料夾"></div>`).join("")}`).join("")}
+      </details>
+      <div class="row"><button type="button" class="btn sm" id="shSave">儲存位置設定</button><button type="button" class="btn sm" id="shReset">還原為目前設定</button></div>
+    </div>`;
+}
+function bindShareCfg(){
+  const d=shareDraft();
+  document.getElementById("shRoot")?.addEventListener("input",ev=>{ d.root=ev.target.value; });
+  document.getElementById("shDetails")?.addEventListener("toggle",ev=>{ d.open=ev.target.open; });
+  app.querySelectorAll("[data-sh]").forEach(i=>i.addEventListener("input",()=>{ d.paths[i.dataset.sh]=i.value; }));
+  document.getElementById("shReset")?.addEventListener("click",()=>{ S.shareDraft=null; render(); });
+  document.getElementById("shSave")?.addEventListener("click",async ev=>{
+    const root=normRoot(d.root); if(!root){ toastEl("請輸入根目錄"); return; }
+    const paths=Object.fromEntries(SITES.map(s=>[s.code,normRel(d.paths[s.code])]));
+    ev.currentTarget.disabled=true;
+    try{ await S.db.collection("projects").doc(SHARE_CFG_ID).set({title:"（系統設定）共用資料夾位置",body:"",status:"closed",files:[],kind:"config",root,paths,updatedAt:new Date().toISOString()}); S.shareDraft=null; toastEl("已儲存位置設定"); render(); }
+    catch(e){ toastEl("儲存失敗，請再試一次"); render(); }
+  });
+}
+
+/* ---------- 掃描共用資料夾（管理者，用公司電腦的 Edge / Chrome） ----------
+   瀏覽器不能自己連到共用資料夾，所以由管理者在電腦上選一次根目錄資料夾，
+   之後按「掃描」就會去數各據點的專案資料夾裡有幾個檔案，結果存回專案（shareScan），大家在儀表板都看得到。
+   只讀取檔案數量與修改時間，不會讀取或上傳檔案內容。 */
+const FS_OK = typeof window.showDirectoryPicker==="function";
+function fsIdb(){ return new Promise((res,rej)=>{ const r=indexedDB.open("site-portal-fs",1); r.onupgradeneeded=()=>r.result.createObjectStore("kv"); r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error); }); }
+async function idbGet(k){ try{ const db=await fsIdb(); return await new Promise((res,rej)=>{ const q=db.transaction("kv").objectStore("kv").get(k); q.onsuccess=()=>res(q.result||null); q.onerror=()=>rej(q.error); }); }catch(e){ return null; } }
+async function idbSet(k,v){ try{ const db=await fsIdb(); await new Promise((res,rej)=>{ const t=db.transaction("kv","readwrite"); t.objectStore("kv").put(v,k); t.oncomplete=()=>res(); t.onerror=()=>rej(t.error); }); }catch(e){} }
+async function shareRootHandle(mode,{pick=false,noPrompt=false}={}){
+  let h = pick ? null : (S.rootHandle || await idbGet("shareRoot"));
+  if(h){ try{ let st=await h.queryPermission({mode}); if(st!=="granted" && !noPrompt) st=await h.requestPermission({mode}); if(st!=="granted") h=null; }catch(e){ h=null; } }
+  if(!h){ if(noPrompt) throw Object.assign(new Error("no_permission"),{name:"NoPermission"}); h=await window.showDirectoryPicker({id:"shareRoot",mode}); await idbSet("shareRoot",h); }
+  S.rootHandle=h; return h;
+}
+async function dirAt(root,rel){ let h=root; for(const seg of rel.split("\\").filter(Boolean)) h=await h.getDirectoryHandle(seg); return h; }
+const FS_SKIP=/^(thumbs\.db|desktop\.ini)$|^~\$|^\./i;
+async function countFiles(dir,acc,depth){
+  for await (const [name,h] of dir.entries()){
+    if(acc.n>=2000) return;
+    if(h.kind==="file"){ if(FS_SKIP.test(name)) continue; acc.n++; try{ const f=await h.getFile(); if(f.lastModified>acc.t) acc.t=f.lastModified; }catch(e){} }
+    else if(depth<6) await countFiles(h,acc,depth+1);
+  }
+}
+async function scanSite(root,p,code,create){
+  let sd; try{ sd=await dirAt(root,shareRel(code)); }catch(e){ return {n:0,e:"site"}; }
+  let pd; try{ pd=await sd.getDirectoryHandle(shareFolderOf(p),{create:!!create}); }catch(e){ return {n:0,e:create?"denied":"folder"}; }
+  const acc={n:0,t:0}; try{ await countFiles(pd,acc,0); }catch(e){ return {n:0,e:"read"}; }
+  return acc.t ? {n:acc.n,t:new Date(acc.t).toISOString()} : {n:acc.n};
+}
+async function scanShare(pid,{create=false,pick=false,auto=false}={}){
+  const p=S.projects.find(x=>x.id===pid); if(!p || !isShare(p) || !S.canEdit || S.scan) return;
+  if(!FS_OK){ toastEl("請改用公司電腦的 Edge 或 Chrome"); return; }
+  let root;
+  try{ root=await shareRootHandle(create?"readwrite":"read",{pick,noPrompt:auto}); }
+  catch(e){ if(auto){ setAutoScan(pid,false); toastEl("自動掃描已停止，請再按一次「掃描共用資料夾」"); render(); } else if(e?.name!=="AbortError") toastEl("無法開啟共用資料夾，請再按一次"); return; }
+  const sites=shareSites(), out={}; let i=0;
+  S.scan={pid,done:0,total:sites.length,create}; render();
+  const worker=async()=>{ while(i<sites.length){ const s=sites[i++]; out[s.code]=await scanSite(root,p,s.code,create); S.scan.done++; const el=document.getElementById("scanProg"); if(el) el.textContent=`${create?"建立資料夾並掃描":"掃描"}中 ${S.scan.done}/${S.scan.total}…`; } };
+  await Promise.all(Array.from({length:5},worker));
+  S.scan=null;
+  const miss=sites.filter(s=>out[s.code].e==="site").length, denied=sites.filter(s=>out[s.code].e==="denied").length;
+  try{
+    await S.db.collection("projects").doc(pid).update({shareScan:{at:new Date().toISOString(),rootName:root.name||"",sites:out}});
+    if(!auto) toastEl(miss===sites.length?"找不到任何據點資料夾，請確認選的是根目錄資料夾":create?(denied?`有 ${denied} 個據點的資料夾無法建立`:"各據點的專案資料夾已建立"):"掃描完成");
+  }catch(e){ toastEl("掃描完成，但結果儲存失敗"); }
+  render();
+}
+function setAutoScan(pid,on){
+  if(S.autoScan){ clearInterval(S.autoScan.timer); S.autoScan=null; }
+  if(on) S.autoScan={pid,timer:setInterval(()=>{ if(!(S.view==="dash" && S.projectId===pid && S.canEdit)){ setAutoScan(pid,false); return; } scanShare(pid,{auto:true}); },5*60000)};
+}
+function shareScanCardHTML(p){
+  const sc=p.shareScan, sites=shareSites(), busy=S.scan&&S.scan.pid===p.id;
+  const lost = sc ? sites.filter(s=>scanOf(p,s.code)?.e==="site") : [];
+  const nofolder = sc ? sites.filter(s=>scanOf(p,s.code)?.e==="folder") : [];
+  const unset = SITES.length-sites.length;
+  const rootName = shareRoot().split("\\").pop();
+  const summary = sc ? `上次掃描 ${fmtDate(sc.at)} · 已放檔 ${shareFileCount(p)}/${sites.length}` : "尚未掃描";
+  if(!S.canEdit) return `<div class="card"><div class="section-h">共用資料夾繳交狀況</div><div class="meta" style="margin-top:4px">${summary}${sc?"。各據點格子下方會顯示檔案數。":"，管理者掃描後會顯示各據點的檔案數。"}</div></div>`;
+  return `<div class="card"><div class="section-h">共用資料夾繳交狀況</div>
+    <div class="meta" style="margin-top:4px">${summary}${unset?` · ${unset} 個據點未設定資料夾`:""}</div>
+    ${busy?`<div class="notice" style="margin-top:8px" id="scanProg">${S.scan.create?"建立資料夾並掃描":"掃描"}中 ${S.scan.done}/${S.scan.total}…</div>`:
+    FS_OK?`<div class="row" style="margin-top:10px"><button type="button" class="btn sm primary" id="scanBtn">掃描共用資料夾</button><button type="button" class="btn sm" id="scanMk">建立各據點的專案資料夾</button><button type="button" class="btn sm" id="scanPick">重新選擇根目錄</button></div>
+      <label class="row meta" style="margin-top:8px;gap:6px;cursor:pointer"><input type="checkbox" id="scanAuto" ${S.autoScan&&S.autoScan.pid===p.id?"checked":""}>每 5 分鐘自動重新掃描（此頁面開著時）</label>
+      <div class="meta" style="margin-top:6px">第一次使用時會請您選擇資料夾，請選「${esc(rootName)}」這一層。掃描只讀取檔案數量與時間，不會上傳檔案。</div>`
+    :`<div class="notice" style="margin-top:8px">掃描功能需要在連得到共用資料夾的公司電腦上，用 Edge 或 Chrome 開啟本網站。手機與其他瀏覽器只能查看上次掃描的結果。</div>`}
+    ${lost.length?`<div class="meta" style="margin-top:8px"><span class="overdue">找不到據點資料夾（${lost.length}）：</span>${lost.map(s=>esc(s.name)).join("、")}。請到「管理 → 共用資料夾位置」修正這些據點的資料夾。</div>`:""}
+    ${nofolder.length?`<div class="meta" style="margin-top:8px">尚未建立專案資料夾（${nofolder.length}）：${nofolder.map(s=>esc(s.name)).join("、")}。可按「建立各據點的專案資料夾」。</div>`:""}
+  </div>`;
+}
+function bindShareScan(p){
+  document.getElementById("scanBtn")?.addEventListener("click",()=>scanShare(p.id));
+  document.getElementById("scanMk")?.addEventListener("click",()=>scanShare(p.id,{create:true}));
+  document.getElementById("scanPick")?.addEventListener("click",()=>scanShare(p.id,{pick:true}));
+  document.getElementById("scanAuto")?.addEventListener("change",ev=>{ setAutoScan(p.id,ev.target.checked); if(ev.target.checked) scanShare(p.id); });
 }
 
 /* ---------- 據點帳號（建立尚未建立的帳號，密碼只顯示一次） ---------- */
@@ -877,7 +1092,8 @@ render();
   catch(e){ S.loadErr="Firebase 設定有誤："+esc(e.message); render(); return; }
   S.auth.onAuthStateChanged(user=>{
     S.unsub.forEach(f=>{try{f();}catch(e){}}); S.unsub=[];
-    Object.assign(S,{projects:[],replies:{},loaded:false,loadErr:null,draft:{},editingProject:null,store:null,acct:null,projectId:null,focusSite:null,editSite:null,filter:"all"});
+    setAutoScan(null,false);
+    Object.assign(S,{shareCfg:null,shareDraft:null,scan:null,projects:[],replies:{},loaded:false,loadErr:null,draft:{},editingProject:null,store:null,acct:null,projectId:null,focusSite:null,editSite:null,filter:"all"});
     const code = user ? codeOf(user.email) : null;
     if(user && !code){ toastEl("這個帳號不是據點帳號，已登出"); S.auth.signOut(); return; }
     S.user=user||null; S.me=code; S.canEdit=(code===ADMIN_CODE);
@@ -894,7 +1110,7 @@ function subscribe(){
   const timer=setTimeout(()=>{ if(!(gotP&&gotR)){ S.loadErr="資料讀取逾時，請檢查網路後重新整理。若是第一次設定，請確認 Firestore 資料庫已建立且規則已發布。"; render(); } },15000);
   const done=()=>{ if(gotP&&gotR){ clearTimeout(timer); S.loaded=true; S.loadErr=null; } render(); };
   const fail=(what)=>e=>{ clearTimeout(timer); S.loadErr=`無法讀取${what}（${esc(e.code||e.message)}）。${e.code==="permission-denied"?"請到 Firebase 主控台 → Firestore Database → 規則，貼上附的 firestore.rules 並發布。":""}`; render(); };
-  S.unsub.push(S.db.collection("projects").onSnapshot(snap=>{ S.projects=snap.docs.map(x=>({id:x.id,...x.data()})); gotP=true; done(); }, fail("專案資料")));
+  S.unsub.push(S.db.collection("projects").onSnapshot(snap=>{ const docs=snap.docs.map(x=>({id:x.id,...x.data()})); S.shareCfg=docs.find(x=>x.id===SHARE_CFG_ID)||null; S.projects=docs.filter(x=>x.id!==SHARE_CFG_ID && x.kind!=="config"); gotP=true; done(); }, fail("專案資料")));
   S.unsub.push(S.db.collection("replies").onSnapshot(snap=>{ S.replies={}; snap.docs.forEach(x=>{S.replies[x.id]=x.data();}); gotR=true; done(); }, fail("回覆資料")));
   S.unsub.push(()=>clearTimeout(timer));
   render();
