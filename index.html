@@ -222,6 +222,8 @@ function render(){
   if(S.loadErr){ app.innerHTML=`<div class="card"><div class="title">目前無法連線到資料</div><div class="meta" style="margin-top:4px">${S.loadErr}</div>${S.user?`<div class="row" style="margin-top:10px"><button type="button" class="btn sm" id="errOut">登出</button></div>`:""}</div>`; document.getElementById("errOut")?.addEventListener("click",logout); return; }
   if(!S.authReady){ app.innerHTML=`<div class="empty">載入中…</div>`; return; }
   if(!S.user) return renderLogin();
+  if(needFirstPw()) return renderPassword(true);
+  if(S.view==="password") return renderPassword(false);
   if(S.view==="account") return renderAccount();
   if(S.view==="pick") return S.canEdit ? renderPick(false) : renderAccount();
   if(S.canEdit && !S.site && S.view!=="admin" && S.view!=="dash"){ renderPick(true); return; }
@@ -256,8 +258,8 @@ function renderLogin(){
     if(!sel.value){ toastEl("請先選擇據點"); return; }
     if(!inp.value){ toastEl("請輸入密碼"); return; }
     btn.disabled=true; btn.textContent="登入中…";
-    try{ LS.set("loginSite",sel.value); await S.auth.signInWithEmailAndPassword(emailOf(sel.value), inp.value); }
-    catch(e){ toastEl(authMsg(e)); btn.disabled=false; btn.textContent="登入"; }
+    try{ LS.set("loginSite",sel.value); S.lastPw=inp.value; await S.auth.signInWithEmailAndPassword(emailOf(sel.value), inp.value); }
+    catch(e){ S.lastPw=null; toastEl(authMsg(e)); btn.disabled=false; btn.textContent="登入"; }
   };
   btn.addEventListener("click",go);
   inp.addEventListener("keydown",e=>{ if(e.key==="Enter") go(); });
@@ -274,11 +276,67 @@ function renderAccount(){
     <div class="meta">${S.canEdit
       ? (s?`目前代 <b>${esc(siteLabel(s))}</b> 檢視與回覆。管理者可代任何據點回覆。`:"尚未選擇代理的據點。")
       : "您目前以此據點登入，只能新增或修改本據點的回覆。若要回覆其他據點，請登出後用該據點的帳號登入。"}</div>
-    <div class="row">${S.canEdit?`<button type="button" class="btn" id="accPick">切換代理據點</button>`:""}<button type="button" class="btn danger" id="accOut">登出</button><button type="button" class="btn" id="accBack">返回</button></div>
+    <div class="row">${S.canEdit?`<button type="button" class="btn" id="accPick">切換代理據點</button>`:""}<button type="button" class="btn" id="accPw">修改密碼</button><button type="button" class="btn danger" id="accOut">登出</button><button type="button" class="btn" id="accBack">返回</button></div>
+    ${!S.canEdit&&!pwChanged()?`<div class="meta">本據點目前仍使用管理者發的初始密碼，建議按「修改密碼」換成自己的密碼。</div>`:""}
   </div>`;
+  document.getElementById("accPw").addEventListener("click",()=>{ S.view="password"; render(); });
   document.getElementById("accPick")?.addEventListener("click",()=>{ S.view="pick"; render(); });
   document.getElementById("accOut").addEventListener("click",logout);
   document.getElementById("accBack").addEventListener("click",()=>{ S.view="home"; render(); });
+}
+
+/* ---------- 修改密碼 ----------
+   是否換過密碼記在 Firebase 帳號本身的 displayName（PW_MARK），不必動 Firestore 規則；
+   管理者刪除帳號重建後標記會消失，該據點下次登入會再被請去換密碼。 */
+const PW_MARK="pw-set", PW_MIN=6;
+const pwChanged = () => !!S.user && S.user.displayName===PW_MARK;
+const pwSkipKey = () => "pwSkip_"+(S.me||"");
+function needFirstPw(){ return !!S.user && !S.canEdit && !pwChanged() && LS.get(pwSkipKey())!=="1"; }
+function pwMsg(e){
+  const c=e?.code||"";
+  if(/invalid-credential|wrong-password|invalid-login/.test(c)) return "目前的密碼不正確";
+  if(/weak-password/.test(c)) return `新密碼至少要 ${PW_MIN} 個字`;
+  if(/too-many-requests/.test(c)) return "嘗試次數太多，請稍候幾分鐘再試";
+  if(/requires-recent-login|user-token-expired/.test(c)) return "登入已過期，請登出後重新登入再修改";
+  if(/network/.test(c)) return "網路連線有問題，請檢查後再試";
+  return "修改失敗（"+c+"）";
+}
+function renderPassword(first){
+  const s=siteByCode[S.site], askOld=!S.lastPw;
+  app.innerHTML=`<div class="card form">
+    <div class="title">${first?"請設定本據點的新密碼":"修改密碼"}</div>
+    <div class="meta">${first
+      ? `這是 <b>${esc(S.canEdit?"管理者":siteLabel(s))}</b> 第一次登入。請把管理者發的初始密碼換成本據點自己的密碼，之後登入都用新密碼。`
+      : `修改 <b>${esc(S.canEdit?"管理者":siteLabel(s))}</b> 的登入密碼。修改後，其他已登入此帳號的裝置需要用新密碼重新登入。`}</div>
+    ${askOld?`<div class="field"><label for="pwOld">目前的密碼</label><input type="password" id="pwOld" autocomplete="current-password"></div>`:""}
+    <div class="field"><label for="pwNew">新密碼（至少 ${PW_MIN} 個字）</label><input type="password" id="pwNew" autocomplete="new-password"></div>
+    <div class="field"><label for="pwNew2">再輸入一次新密碼</label><input type="password" id="pwNew2" autocomplete="new-password"></div>
+    <div class="row"><button type="button" class="btn primary grow" id="pwSave">儲存新密碼</button><button type="button" class="btn" id="pwLater">${first?"先沿用原密碼":"取消"}</button></div>
+    <div class="meta">請記好新密碼並告知據點內需要登入的同仁；管理者查不到各據點自訂的密碼，忘記時只能請管理者重新設定。</div>
+  </div>`;
+  const $=id=>document.getElementById(id), btn=$("pwSave");
+  const leave=()=>{ if(S.view==="password") S.view="account"; render(); };
+  const go=async()=>{
+    const oldPw=askOld?$("pwOld").value:S.lastPw, n1=$("pwNew").value, n2=$("pwNew2").value;
+    if(!oldPw){ toastEl("請輸入目前的密碼"); return; }
+    if(n1.length<PW_MIN){ toastEl(`新密碼至少要 ${PW_MIN} 個字`); return; }
+    if(n1!==n2){ toastEl("兩次輸入的新密碼不一樣"); return; }
+    if(n1===oldPw){ toastEl("新密碼不能和目前的密碼相同"); return; }
+    btn.disabled=true; btn.textContent="儲存中…";
+    try{
+      const u=S.auth.currentUser;
+      await u.reauthenticateWithCredential(firebase.auth.EmailAuthProvider.credential(u.email,oldPw));
+      await u.updatePassword(n1);
+      S.lastPw=n1;
+      try{ await u.updateProfile({displayName:PW_MARK}); }catch(e){ LS.set(pwSkipKey(),"1"); }
+      toastEl("密碼已更新，下次請用新密碼登入");
+      leave();
+    }catch(e){ toastEl(pwMsg(e)); btn.disabled=false; btn.textContent="儲存新密碼"; }
+  };
+  btn.addEventListener("click",go);
+  $("pwNew2").addEventListener("keydown",e=>{ if(e.key==="Enter") go(); });
+  $("pwLater").addEventListener("click",()=>{ if(first) LS.set(pwSkipKey(),"1"); leave(); });
+  (askOld?$("pwOld"):$("pwNew")).focus();
 }
 
 function renderPick(first){
@@ -683,7 +741,7 @@ function genPass(){
 function acctInner(){
   const A=S.acct;
   const head=`<div class="section-h">據點帳號</div>
-    <div class="meta" style="margin-top:4px">每個據點一個帳號（共 ${SITES.length} 個），登入後只能新增、修改自己據點的回覆。按下方按鈕會替「還沒有帳號」的據點建立帳號並產生密碼，已有帳號的據點不會被更動。</div>`;
+    <div class="meta" style="margin-top:4px">每個據點一個帳號（共 ${SITES.length} 個），登入後只能新增、修改自己據點的回覆。按下方按鈕會替「還沒有帳號」的據點建立帳號並產生密碼，已有帳號的據點不會被更動。各據點第一次登入時，系統會請他們把初始密碼換成自己的密碼（之後也可點右上角據點名稱 →「修改密碼」）。</div>`;
   if(!A) return head+`<div class="row" style="margin-top:10px"><button type="button" class="btn sm" id="acctGo">建立尚未建立的據點帳號</button></div>
     <div class="meta" style="margin-top:6px">要重設某據點密碼：到 Firebase 主控台 → Authentication → 使用者，刪除該據點帳號，再回來按這個按鈕，就會只替它產生新密碼。</div>`;
   if(A.running) return head+`<div class="notice" style="margin-top:10px">建立中 ${A.done}/${SITES.length}…請勿關閉此頁</div>`;
@@ -821,7 +879,9 @@ render();
     if(user && !code){ toastEl("這個帳號不是據點帳號，已登出"); S.auth.signOut(); return; }
     S.user=user||null; S.me=code; S.canEdit=(code===ADMIN_CODE);
     S.site = !code ? null : S.canEdit ? (LS.get("adminSite")||null) : code;
-    if(S.view==="account"||S.view==="pick") S.view="home";
+    if(S.view==="account"||S.view==="pick"||S.view==="password") S.view="home";
+    if(!user) S.lastPw=null;
+    else { const before=needFirstPw(); user.reload().then(()=>{ if(S.auth.currentUser===user && needFirstPw()!==before) render(); }).catch(()=>{}); }
     S.authReady=true;
     if(user) subscribe(); else render();
   });
