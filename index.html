@@ -229,7 +229,7 @@ function shareFieldHTML(p,code,d,listId){
     ${d.files.length?`<div class="field"><label>先前在網站上傳的附件</label><div id="${listId}">${filesHTML(d.files,true)}</div></div>`:""}`;
 }
 function replyAttachHTML(p,code,r){
-  const cloud = (!isShare(p) || (r.files&&r.files.length) || r.filesClearedAt) ? replyFilesHTML(r) : "";
+  const cloud = (!isShare(p) || (r.files&&r.files.length) || r.filesClearedAt || r.archivedTo) ? replyFilesHTML(r) : "";
   return cloud + (isShare(p)?`<div style="margin-top:6px">${sharePathHTML(p,code,true)}</div>`:"");
 }
 function shareCellHTML(p,code){
@@ -244,7 +244,7 @@ const S = {
   canEdit:false, fileCache:{},
   projects:[], replies:{}, loaded:false, loadErr:null,
   draft:{}, uploading:false, editingProject:null, acct:null,
-  shareCfg:null, shareDraft:null, rm:null, scan:null, autoScan:null, rootHandle:null,
+  shareCfg:null, shareDraft:null, rm:null, arc:null, archiving:null, scan:null, autoScan:null, rootHandle:null,
   store:null, clearing:null, orphanJob:null, orphConfirm:false, focusSite:null, editSite:null, zipping:null, filter:"all"
 };
 const LS = { get:k=>{try{return localStorage.getItem(k);}catch(e){return null;}}, set:(k,v)=>{try{localStorage.setItem(k,v);}catch(e){}}, del:k=>{try{localStorage.removeItem(k);}catch(e){}} };
@@ -273,6 +273,8 @@ function referencedIds(){
   return set;
 }
 function replyFilesHTML(r){
+  if(r.archivedTo) return ((r.files&&r.files.length)?filesHTML(r.files,false):"")
+    + `<div class="meta" style="margin-top:6px">已於 ${fmtDate(r.archivedAt)} 結案，回覆文字與附件已存到公司共用資料夾：</div><div class="pathbox">${esc(r.archivedTo)}</div><div class="row" style="margin-top:6px"><button type="button" class="btn sm" data-copy-path="${esc(r.archivedTo)}">複製路徑</button></div>`;
   if(r.filesClearedAt && !(r.files&&r.files.length)) return `<div class="meta">附件已於 ${fmtDate(r.filesClearedAt)} 清除</div>`;
   return filesHTML(r.files,false);
 }
@@ -501,7 +503,7 @@ function renderProject(){
       <div class="meta" style="margin-top:4px">${p.deadline?`期限 <span class="${isOverdue(p)?"overdue":""}">${esc(p.deadline)}</span> · `:""}發布 ${fmtDate(p.createdAt)}</div>
       <div class="body-text" style="margin-top:10px">${esc(p.body)}</div>
       ${p.files&&p.files.length?`<div style="margin-top:10px">${filesHTML(p.files,false)}</div>`:""}
-      ${p.filesClearedAt&&!(p.files&&p.files.length)?`<div class="meta" style="margin-top:10px">本專案附件已於 ${fmtDate(p.filesClearedAt)} 清除</div>`:""}
+      ${p.archive&&p.status==="closed"?`<div class="meta" style="margin-top:10px">本專案已於 ${fmtDate(p.archive.at)} 結案，各據點的回覆與附件已存到公司共用資料夾。</div>`:p.filesClearedAt&&!(p.files&&p.files.length)?`<div class="meta" style="margin-top:10px">本專案附件已於 ${fmtDate(p.filesClearedAt)} 清除</div>`:""}
     </div>
     <div class="card">
       <div class="section-h">${esc(site.name)}${showCode(site)?`（${site.code}）`:""}的回覆</div>
@@ -600,12 +602,14 @@ async function saveReply(p,code,d,key,btn){
   if(btn) btn.disabled=true;
   const oldFiles=(S.replies[key]?.files)||[];
   try{
-    await S.db.collection("replies").doc(key).set({projectId:p.id,site:code,text:d.text.trim(),files:d.files,updatedAt:new Date().toISOString()});
+    await S.db.collection("replies").doc(key).set({projectId:p.id,site:code,text:d.text.trim(),files:d.files,updatedAt:new Date().toISOString(),...arcKeep(S.replies[key])});
   }catch(e){ toastEl(e?.code==="permission-denied"?"沒有權限：只能回覆自己據點，且專案需在進行中":"送出失敗，請再試一次"); if(btn) btn.disabled=false; return false; }
   toastEl("已儲存"); delete S.draft[key];
   if(S.canEdit){ const keep=new Set(d.files.map(f=>f.id)); for(const f of oldFiles){ if(!keep.has(f.id)){ try{ await deleteStored(f); }catch(e){} } } }
   return true;
 }
+/* 重新開放後再修改回覆時，保留「上次結案已存到共用資料夾」的紀錄 */
+function arcKeep(r){ return r&&r.archivedTo ? {archivedAt:r.archivedAt||"",archivedTo:r.archivedTo,archivedNames:r.archivedNames||[]} : {}; }
 /* 管理者刪除整筆回覆（含附件） */
 async function deleteReply(p,code){
   const key=replyKey(p.id,code), r=S.replies[key]; if(!S.canEdit||!r) return;
@@ -706,6 +710,7 @@ function renderDashProject(){
       ${S.canEdit?`<div class="row" style="margin-top:10px"><button type="button" class="btn sm" id="zipBtn" ${z?"disabled":""}>${z?`打包中 ${z.done}/${z.total}…`:"打包下載全部內容（ZIP）"}</button><span class="meta">公告、附件、各據點回覆與回覆總表</span></div>`:""}
     </div>
     <div class="card"><div class="section-h">各據點回覆狀況</div><div class="meta" style="margin-top:2px">${S.canEdit?"點據點可查看內容；按「編輯」可直接修改文字與附件":"點已回覆的據點可查看內容；點本據點可直接回覆或編輯"}</div>${filterBarHTML(p.id)}${statusGridHTML(p.id)||`<div class="meta" style="margin-top:8px">沒有符合的據點</div>`}</div>
+    ${p.archive&&S.canEdit?`<div class="card"><div class="section-h">結案資料位置</div><div class="meta" style="margin-top:4px">${fmtDate(p.archive.at)} 結案，已存入 ${p.archive.files||0} 個附件。各據點的回覆在各據點資料夾的「${esc(p.archive.folder)}」；公告與回覆總表在：</div><div class="pathbox" style="margin-top:6px">${esc(p.archive.path)}</div><div class="row" style="margin-top:6px"><button type="button" class="btn sm" data-copy-path="${esc(p.archive.path)}">複製路徑</button></div></div>`:""}
     ${isShare(p)?shareScanCardHTML(p):""}
     ${fs&&(fr||editing)?`<div class="card" id="focusCard"><div class="row"><div class="grow section-h">${esc(fs.name)} 的回覆${editing?(fr?"・編輯中":"・新增回覆"):""}</div><button type="button" class="btn sm" id="focusClose">關閉</button></div><div style="margin-top:8px">${editing?replyEditorHTML(p,fs,fr,d):replyDetailHTML(p,fs,fr)}</div></div>`:""}
     ${listOnly?"":`<div class="card"><div class="section-h">回覆內容</div>
@@ -790,18 +795,20 @@ function renderAdmin(){
   </div>`;
   const list = sortedProjects().map(p=>{
     const st=projectStats(p.id), busy=!!(S.clearing&&S.clearing.pid===p.id);
-    const fileMeta = st.count ? ` · 附件 ${st.count} 件（${fmtSize(st.bytes)}）` : (p.filesClearedAt?" · 附件已清除":"");
+    const fileMeta = st.count ? ` · 附件 ${st.count} 件（${fmtSize(st.bytes)}）` : (p.archive?" · 附件已存到共用資料夾":p.filesClearedAt?" · 附件已清除":"");
+    const arcBusy=!!(S.archiving&&S.archiving.pid===p.id), anyJob=!!(S.archiving||S.clearing);
     const canClear = p.status==="closed" && st.count>0;
     return `<div class="card"><div class="row"><div class="grow title">${esc(p.title)}</div>${p.status==="closed"?`<span class="pill closed">已結案</span>`:`<span class="pill ok">進行中</span>`}</div>
     <div class="meta" style="margin-top:4px">${isShare(p)?"檔案放共用資料夾 · ":""}${p.deadline?"期限 "+esc(p.deadline)+" · ":""}回覆 ${countReplies(p.id)}/${SITES.length}${fileMeta}</div>
-    <div class="row" style="margin-top:10px"><button type="button" class="btn sm" data-edit="${p.id}">編輯</button><button type="button" class="btn sm" data-toggle="${p.id}">${p.status==="closed"?"重新開放":"結案"}</button>${canClear?`<button type="button" class="btn sm" data-clear="${p.id}" ${S.clearing?"disabled":""}>清除附件</button>`:""}<button type="button" class="btn sm danger" data-del="${p.id}" ${busy?"disabled":""}>刪除</button></div>
+    <div class="row" style="margin-top:10px"><button type="button" class="btn sm" data-edit="${p.id}">編輯</button><button type="button" class="btn sm" data-toggle="${p.id}" ${anyJob?"disabled":""}>${p.status==="closed"?"重新開放":"結案"}</button>${p.status==="closed"&&canArchive(p)?`<button type="button" class="btn sm" data-arc="${p.id}" ${anyJob?"disabled":""}>存到共用資料夾</button>`:""}${canClear?`<button type="button" class="btn sm" data-clear="${p.id}" ${anyJob?"disabled":""}>清除附件</button>`:""}<button type="button" class="btn sm danger" data-del="${p.id}" ${busy||arcBusy?"disabled":""}>刪除</button></div>
+    ${arcBusy?`<div class="notice" style="margin-top:8px" id="arcProg">${arcProgText()}</div>`:arcPanelHTML(p)}
     ${S.scan&&S.scan.pid===p.id?`<div class="notice" style="margin-top:8px" id="scanProg">${S.scan.create?"建立資料夾並掃描":"掃描"}中 ${S.scan.done}/${S.scan.total}…</div>`:""}
     ${busy?`<div class="notice" style="margin-top:8px" id="clr-prog">清除中 ${S.clearing.done}/${S.clearing.total}…</div>`:""}
     ${canClear&&!busy?`<div id="clrc-${p.id}" hidden class="notice" style="margin-top:8px">將永久刪除此專案的 ${st.count} 個附件（${fmtSize(st.bytes)}），包含公告附件與各據點回覆的照片、PDF；文字回覆會保留。<span class="overdue">刪除後無法復原。</span><div class="row" style="margin-top:8px"><button type="button" class="btn sm danger" data-clear-yes="${p.id}">確定清除</button><button type="button" class="btn sm" data-clear-no="${p.id}">取消</button></div></div>`:""}
     <div id="confirm-${p.id}" hidden class="notice" style="margin-top:8px">確定要刪除此專案、所有回覆及附件？ <button type="button" class="btn sm danger" data-del-yes="${p.id}">確定刪除</button></div></div>`;
   }).join("");
   app.innerHTML = form + `<div class="card" id="shareBox">${shareCfgInner()}</div>` + `<div class="card" id="rmBox">${rmInner()}</div>` + `<div class="card" id="acctBox">${acctInner()}</div>` + `<div class="card" id="storageBox">${storageInner()}</div>` + `<div class="section-h">所有專案</div>` + (list||`<div class="card empty">尚無專案</div>`);
-  bindStorage(); bindAcct(); bindShareCfg(); bindRm();
+  bindStorage(); bindAcct(); bindShareCfg(); bindRm(); bindArc();
   const d = S.editingProject || (S.editingProject={files:[]}); d.files=d.files||[];
   const exEl=document.getElementById("pFolderEx"), fEl=document.getElementById("pFolder");
   const showEx=()=>{ if(exEl) exEl.textContent=`${shareRoot()}\\${shareRel("SD0")||"（據點資料夾）"}\\${safeFolder(fEl.value)||safeFolder(d.title)||"（專案資料夾）"}`; };
@@ -846,7 +853,10 @@ function renderAdmin(){
   });
   document.getElementById("pCancel")?.addEventListener("click",()=>{S.editingProject=null;render();});
   app.querySelectorAll("[data-edit]").forEach(b=>b.addEventListener("click",()=>{ const p=S.projects.find(x=>x.id===b.dataset.edit); S.editingProject={id:p.id,title:p.title,body:p.body,deadline:p.deadline||"",files:[...(p.files||[])],storage:p.storage||"cloud",shareFolder:p.shareFolder||"",folderTouched:!!p.shareFolder}; render(); window.scrollTo({top:0}); }));
-  app.querySelectorAll("[data-toggle]").forEach(b=>b.addEventListener("click",async()=>{ const p=S.projects.find(x=>x.id===b.dataset.toggle); try{ await S.db.collection("projects").doc(p.id).update({status:p.status==="closed"?"open":"closed"}); }catch(e){toastEl("更新失敗");} }));
+  app.querySelectorAll("[data-arc]").forEach(b=>b.addEventListener("click",()=>{ const p=S.projects.find(x=>x.id===b.dataset.arc); if(p) arcOpen(p); }));
+  app.querySelectorAll("[data-toggle]").forEach(b=>b.addEventListener("click",async()=>{ const p=S.projects.find(x=>x.id===b.dataset.toggle);
+    if(p.status!=="closed" && canArchive(p)){ arcOpen(p); return; }   // 結案＝先把資料存到共用資料夾
+    try{ await S.db.collection("projects").doc(p.id).update({status:p.status==="closed"?"open":"closed"}); }catch(e){toastEl("更新失敗");} }));
   app.querySelectorAll("[data-del]").forEach(b=>b.addEventListener("click",()=>{ document.getElementById("confirm-"+b.dataset.del).hidden=false; }));
   app.querySelectorAll("[data-del-yes]").forEach(b=>b.addEventListener("click",async()=>{ const pid=b.dataset.delYes; b.disabled=true;
     const files=projectFileList(pid);
@@ -860,6 +870,147 @@ function renderAdmin(){
   app.querySelectorAll("[data-clear-no]").forEach(b=>b.addEventListener("click",()=>{ const el=document.getElementById("clrc-"+b.dataset.clearNo); if(el) el.hidden=true; }));
   app.querySelectorAll("[data-clear-yes]").forEach(b=>b.addEventListener("click",()=>{ b.disabled=true; clearProjectFiles(b.dataset.clearYes); }));
   if(!S.store || (!S.store.loading && Date.now()-(S.store.at||0)>60000)) loadStorage();
+}
+
+/* ---------- 結案：把網站上的資料存到公司共用資料夾（管理者，用公司電腦的 Edge / Chrome） ----------
+   結案時做三件事：
+   1. 各據點的回覆文字（○○_回覆內容.txt）與附件 → 根目錄 \ 據點資料夾 \ 專案資料夾
+   2. 公告、公告附件、回覆總表.csv → 根目錄 \ _結案總表 \ 專案資料夾
+      （沒有設定資料夾、或找不到資料夾的據點，回覆也放在這裡的「未設定資料夾的據點」底下）
+   3. 每個檔案確認寫入（大小相符）後，才從網站刪除、釋放空間；文字回覆仍留在網站上。
+   沒存成功的附件會留在網站上，可再按一次「存到共用資料夾」。 */
+const ARCHIVE_DIR = "_結案總表", ARCHIVE_OTHER = "未設定資料夾的據點";
+const arcCentral = folder => `${shareRoot()}\\${ARCHIVE_DIR}\\${folder}`;
+function canArchive(p){
+  const n=projectStats(p.id).count;
+  return p.status==="open" ? (!isShare(p) || n>0) : (n>0 || (!isShare(p) && !p.archive) || !!p.archive?.noSummary);
+}
+function arcOpen(p){ S.arc={pid:p.id,folder:shareFolderOf(p)}; render(); document.getElementById("arcPanel")?.scrollIntoView({behavior:"smooth",block:"nearest"}); }
+function arcProgText(){ const J=S.archiving; return J ? `${J.label} ${J.done}/${J.total}…請勿關閉此頁` : ""; }
+function arcPanelHTML(p){
+  const A=S.arc; if(!A || A.pid!==p.id) return "";
+  const st=projectStats(p.id), open=p.status==="open", sh=isShare(p);
+  const replied=SITES.filter(s=>S.replies[replyKey(p.id,s.code)]);
+  const noDir=replied.filter(s=>!shareRel(s.code));
+  const rootName=shareRoot().split("\\").pop();
+  return `<div class="notice" style="margin-top:8px" id="arcPanel">
+    <div><b>${open?"結案":"存到共用資料夾"}</b>：把這個專案在網站上的 ${replied.length} 筆回覆、${st.count} 個附件${st.count?`（${fmtSize(st.bytes)}）`:""}存到公司共用資料夾，再把網站上的附件刪除、釋放空間。${open?"結案後各據點不能再修改回覆。":""}</div>
+    <div class="form" style="margin-top:10px">
+      <div class="field"><label for="arcFolder">專案資料夾名稱</label><input type="text" id="arcFolder" value="${esc(A.folder)}" ${sh?"disabled":""} autocomplete="off"></div>
+      <div class="meta">各據點的回覆文字與附件，放在各據點自己的資料夾，例如桃園站：</div><div class="pathbox" id="arcEx1"></div>
+      <div class="meta">公告、公告附件與回覆總表${noDir.length?`，以及尚未設定資料夾的 ${noDir.length} 個據點（${noDir.map(s=>esc(s.name)).join("、")}）的回覆`:""}，放在：</div><div class="pathbox" id="arcEx2"></div>
+      <div><span class="overdue">每個檔案確認寫入共用資料夾後，才會從網站刪除；網站上的附件刪除後無法復原。</span>文字回覆仍會保留在網站上。</div>
+      ${FS_OK?`<div class="row"><button type="button" class="btn sm primary" id="arcGo">${open?"結案並存到共用資料夾":"存到共用資料夾"}</button>${open?`<button type="button" class="btn sm" id="arcOnly">只結案，檔案先留在網站</button>`:""}<button type="button" class="btn sm" id="arcPick">重新選擇根目錄</button><button type="button" class="btn sm" id="arcCancel">取消</button></div>
+        <div class="meta">第一次使用時會請您選擇資料夾，請選「${esc(rootName)}」這一層，並允許網站編輯檔案。</div>`
+      :`<div>這台裝置連不到共用資料夾。請改用公司電腦的 Edge 或 Chrome 開啟本網站再結案${open?"；也可以先只結案（停止收件），之後再用公司電腦按「存到共用資料夾」":""}。</div>
+        <div class="row">${open?`<button type="button" class="btn sm" id="arcOnly">只結案，檔案先留在網站</button>`:""}<button type="button" class="btn sm" id="arcCancel">取消</button></div>`}
+    </div></div>`;
+}
+function bindArc(){
+  const A=S.arc; if(!A) return;
+  const p=S.projects.find(x=>x.id===A.pid); if(!p){ S.arc=null; return; }
+  const inp=document.getElementById("arcFolder"), e1=document.getElementById("arcEx1"), e2=document.getElementById("arcEx2");
+  const show=()=>{ const f=safeFolder(A.folder)||"（專案資料夾）";
+    if(e1) e1.textContent=`${shareRoot()}\\${shareRel("SD0")||"（據點資料夾）"}\\${f}`;
+    if(e2) e2.textContent=arcCentral(f); };
+  show();
+  inp?.addEventListener("input",()=>{ A.folder=inp.value; show(); });
+  document.getElementById("arcCancel")?.addEventListener("click",()=>{ S.arc=null; render(); });
+  document.getElementById("arcOnly")?.addEventListener("click",async()=>{ S.arc=null; try{ await S.db.collection("projects").doc(p.id).update({status:"closed"}); toastEl("已結案，附件仍留在網站上"); }catch(e){ toastEl("更新失敗"); } render(); });
+  document.getElementById("arcPick")?.addEventListener("click",async()=>{ try{ const h=await shareRootHandle("readwrite",{pick:true}); toastEl(`已選擇「${h.name}」`); }catch(e){ if(e?.name!=="AbortError") toastEl("無法開啟資料夾，請再按一次"); } });
+  document.getElementById("arcGo")?.addEventListener("click",()=>archiveProject(p.id));
+}
+const fsName = n => safeName(n).replace(/[. ]+$/,"") || "檔案";
+const txtBlob = s => new Blob(["﻿"+String(s).replace(/\r?\n/g,"\r\n")],{type:"text/plain"});
+async function fsSize(dir,name){ try{ return (await (await dir.getFileHandle(name)).getFile()).size; }catch(e){ return null; } }
+async function fsPut(dir,name,blob){
+  const fh=await dir.getFileHandle(name,{create:true}), w=await fh.createWritable();
+  try{ await w.write(blob); await w.close(); }catch(e){ try{ await w.abort(); }catch(_){} throw e; }
+  if((await fh.getFile()).size!==blob.size) throw new Error("size");   // 寫完再讀一次大小，確認真的存進去了
+}
+/* 不覆蓋資料夾裡原有的檔案：同名且大小相同＝上次已存過，直接略過；同名但不同檔＝改存成「檔名 (2).副檔名」 */
+async function fsPutUnique(dir,name,blob){
+  const i=name.lastIndexOf("."), base=i>0?name.slice(0,i):name, ext=i>0?name.slice(i):"";
+  for(let k=1;k<200;k++){
+    const n=k===1?name:`${base} (${k})${ext}`, sz=await fsSize(dir,n);
+    if(sz===null){ await fsPut(dir,n,blob); return n; }
+    if(sz===blob.size) return n;
+  }
+  throw new Error("name");
+}
+async function archiveProject(pid){
+  const p=S.projects.find(x=>x.id===pid), A=S.arc;
+  if(!p || !S.canEdit || S.archiving || S.clearing || S.scan) return;
+  if(S.uploading){ toastEl("檔案還在上傳中"); return; }
+  if(!FS_OK){ toastEl("請改用公司電腦的 Edge 或 Chrome"); return; }
+  const raw = isShare(p) ? shareFolderOf(p) : String(A&&A.pid===pid?A.folder:shareFolderOf(p)).trim(), folder=safeFolder(raw);
+  if(!folder){ toastEl("請輸入專案資料夾名稱"); return; }
+  if(folder!==raw){ toastEl('資料夾名稱不能含有 \\ / : * ? " < > | ，結尾也不能是句點或空白'); return; }
+  let root;
+  try{ root=await shareRootHandle("readwrite"); }
+  catch(e){ if(e?.name!=="AbortError") toastEl("無法開啟共用資料夾，請再按一次"); return; }
+  const J=S.archiving={pid,done:0,total:replyKeysOf(pid).length+projectFileList(pid).length+1,label:"檢查據點資料夾"};
+  S.arc=null; render();
+  const prog=()=>{ const el=document.getElementById("arcProg"); if(el) el.textContent=arcProgText(); };
+  const tick=()=>{ J.done++; prog(); };
+  const stop=msg=>{ S.archiving=null; S.arc={pid,folder}; render(); toastEl(msg); };
+  /* 先確認選到的是正確的根目錄，再開始寫入 */
+  const dirs={}; let found=0;
+  for(const s of shareSites()){ try{ dirs[s.code]=await dirAt(root,shareRel(s.code)); found++; }catch(e){} }
+  if(!found) return stop(`找不到任何據點資料夾，請按「重新選擇根目錄」，選「${shareRoot().split("\\").pop()}」這一層`);
+  let central;
+  try{ central=await (await root.getDirectoryHandle(ARCHIVE_DIR,{create:true})).getDirectoryHandle(folder,{create:true}); }
+  catch(e){ return stop("無法在共用資料夾建立資料夾，請確認這台電腦的帳號有寫入權限"); }
+  J.label="存到共用資料夾"; prog();
+  const now=new Date().toISOString(), when=iso=>iso?new Date(iso).toLocaleString("zh-TW"):"";
+  let moved=0, freed=0, left=0, saved=0, dbFail=false; const failSites=[];
+  const copyFiles=async(dir,files)=>{ const ok=[],keep=[],names=[]; for(const f of files){ try{ const {parts}=await fileBytes(f.id); names.push(await fsPutUnique(dir,fsName(f.name),new Blob(parts))); ok.push(f); }catch(e){ keep.push(f); } tick(); } return {ok,keep,names}; };
+  const drop=async list=>{ for(const f of list){ moved++; freed+=f.size||0; try{ await deleteStored(f); }catch(e){} } };   // 刪不掉的會變成無主檔案，「儲存空間」可清理
+  const sh=isShare(p);
+  const rows=[["據點代碼","據點","類別","狀態","回覆時間","回覆內容","附件數","存放位置"]];
+  for(const s of SITES){
+    const key=replyKey(pid,s.code), r=S.replies[key];
+    if(!r){ const fd=isDone(pid,s.code); rows.push([s.code,s.name,s.group,fd?"已回覆（僅放檔案）":"未回覆","","",0,fd?sharePath(p,s.code):""]); continue; }
+    const files=r.files||[], prev=r.archivedNames||[];
+    let dir=null, path="";
+    if(dirs[s.code]){ try{ dir=await dirs[s.code].getDirectoryHandle(folder,{create:true}); path=`${shareRoot()}\\${shareRel(s.code)}\\${folder}`; }catch(e){} }
+    if(!dir){ try{ const nm=fsName(`${s.code}_${s.name}`); dir=await (await central.getDirectoryHandle(ARCHIVE_OTHER,{create:true})).getDirectoryHandle(nm,{create:true}); path=`${arcCentral(folder)}\\${ARCHIVE_OTHER}\\${nm}`; }catch(e){} }
+    /* 先存附件，再寫回覆內容.txt（裡面列出實際存入的檔名）；兩者都成功才動網站上的資料 */
+    let okText=false, res={ok:[],keep:files,names:[]};
+    if(dir){
+      res=await copyFiles(dir,files);
+      const names=[...prev,...res.names];
+      try{ await fsPut(dir,`${fsName(s.name)}_回覆內容.txt`,txtBlob(`專案：${p.title}\n據點：${s.name}（${s.code}）\n回覆時間：${when(r.updatedAt)}\n\n${r.text||"（僅附件）"}\n${names.length?`\n附件（${names.length} 個）：\n${names.map(n=>"・"+n).join("\n")}\n`:""}`)); okText=true; }
+      catch(e){ res={ok:[],keep:files,names:[]}; }
+      if(okText){
+        try{ await S.db.collection("replies").doc(key).update({files:res.keep,archivedAt:now,archivedTo:path,archivedNames:names}); saved++; await drop(res.ok); }
+        catch(e){ dbFail=true; res={ok:[],keep:files,names:[]}; }
+      }
+    } else files.forEach(tick);
+    left+=res.keep.length; if(!okText || res.keep.length) failSites.push(s.name);
+    rows.push([s.code,s.name,s.group,"已回覆",when(r.updatedAt),r.text||"",prev.length+files.length,okText?path:"（沒有存成功）"]);
+    tick();
+  }
+  /* 公告、公告附件、回覆總表 */
+  let pOk=[], pKeep=p.files||[], sumOk=true;
+  if(pKeep.length){ try{ const r=await copyFiles(await central.getDirectoryHandle("公告附件",{create:true}),pKeep); pOk=r.ok; pKeep=r.keep; }catch(e){ pKeep.forEach(tick); } }
+  left+=pKeep.length;
+  try{
+    await fsPut(central,"公告.txt",txtBlob(`專案名稱：${p.title}\n回覆期限：${p.deadline||"無"}\n發布時間：${when(p.createdAt)}\n結案時間：${when(now)}\n回覆：${countReplies(pid)}/${SITES.length}\n\n${p.body||""}\n`));
+    await fsPut(central,"回覆總表.csv",new Blob(["﻿"+rows.map(r=>r.map(v=>`"${String(v??"").replace(/"/g,'""')}"`).join(",")).join("\r\n")],{type:"text/csv"}));
+  }catch(e){ sumOk=false; }
+  tick();
+  try{
+    await S.db.collection("projects").doc(pid).update({status:"closed",shareFolder:folder,files:pKeep,
+      archive:{at:now,folder,path:arcCentral(folder),files:(p.archive?.files||0)+moved+pOk.length,bytes:(p.archive?.bytes||0)+freed+pOk.reduce((a,f)=>a+(f.size||0),0),noSummary:!sumOk}});
+    await drop(pOk);
+  }catch(e){ dbFail=true; }
+  S.archiving=null;
+  toastEl(dbFail ? "檔案已存到共用資料夾，但部分紀錄沒有更新成功；請重新整理頁面後再按一次「存到共用資料夾」"
+    : left ? `已結案。還有 ${left} 個附件沒有存成功${failSites.length?`（${failSites.slice(0,5).join("、")}${failSites.length>5?"…":""}）`:""}，仍留在網站上；請稍後按「存到共用資料夾」再試一次`
+    : !sumOk ? `已結案，${moved} 個附件已存到共用資料夾；但回覆總表沒有寫入成功（可能正被 Excel 開啟），關閉後可再按一次`
+    : `已結案：${saved} 筆回覆、${moved} 個附件（${fmtSize(freed)}）已存到共用資料夾，網站空間已釋放`);
+  render(); loadStorage();
 }
 
 /* ---------- 共用資料夾位置設定（管理） ---------- */
@@ -1096,6 +1247,7 @@ function acctInner(){
     ${bad.length?`<div class="meta" style="margin-top:8px">失敗：${bad.map(x=>esc(x.s.name)+"（"+esc(x.err)+"）").join("、")}</div>`:""}
     <div class="row" style="margin-top:10px"><button type="button" class="btn sm" id="acctDone">${made.length?"我已下載，關閉清單":"關閉"}</button></div>`;
 }
+window.addEventListener("beforeunload",e=>{ if(S.archiving){ e.preventDefault(); e.returnValue=""; } });
 window.addEventListener("beforeunload",e=>{ if(S.acct && (S.acct.running || S.acct.list.some(x=>x.st==="new"))){ e.preventDefault(); e.returnValue=""; } });
 function renderAcct(){ const box=document.getElementById("acctBox"); if(box){ box.innerHTML=acctInner(); bindAcct(); } }
 function acctListText(sep){
@@ -1160,7 +1312,7 @@ function storageInner(){
     <div class="usage-line"><span class="big">${fmtSize(st.used)}</span><span class="meta">／ 免費額度 1 GB（已用 ${(pb*100).toFixed(1).replace(/\.0$/,"")}%）</span></div>
     <div class="bar meter${hi?" hi":""}" style="margin-top:8px"><i style="width:${Math.min(100,Math.max(pb*100,st.used?0.5:0)).toFixed(1)}%"></i></div>
     <div class="meta" style="margin-top:6px">檔案共 ${st.files} 個${st.loading?" · 更新中…":""}${st.err?` · ${esc(st.err)}`:""}</div>
-    ${hi?`<div class="overdue" style="margin-top:6px">空間快用完了，請清除已結案專案的附件。</div>`:""}
+    ${hi?`<div class="overdue" style="margin-top:6px">空間快用完了，請把專案結案（附件會存到共用資料夾並從網站刪除）。</div>`:""}
     ${orphHTML}`;
 }
 function renderStorage(){ const box=document.getElementById("storageBox"); if(box){ box.innerHTML=storageInner(); bindStorage(); } }
@@ -1171,7 +1323,7 @@ function bindStorage(){
   document.getElementById("orphYes")?.addEventListener("click",()=>cleanOrphans());
 }
 async function clearProjectFiles(pid){
-  const p=S.projects.find(x=>x.id===pid); if(!p||S.clearing) return;
+  const p=S.projects.find(x=>x.id===pid); if(!p||S.clearing||S.archiving) return;
   const keys=replyKeysOf(pid).filter(k=>(S.replies[k].files||[]).length);
   const total=projectFileList(pid).length; if(!total) return;
   S.clearing={pid,done:0,total}; render();
