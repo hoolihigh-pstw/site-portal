@@ -252,7 +252,7 @@ const LS = { get:k=>{try{return localStorage.getItem(k);}catch(e){return null;}}
 try{ const v=location.hash.replace("#",""); if(["home","dash","admin"].includes(v)) S.view=v; }catch(e){}
 
 const app = document.getElementById("app");
-const toastEl = (()=>{let t=null;return (msg)=>{ if(t) t.remove(); t=document.createElement("div"); t.className="toast"; t.textContent=msg; document.body.appendChild(t); setTimeout(()=>{t&&t.remove();t=null;},2600); };})();
+const toastEl = (()=>{let t=null,timer=null;return (msg)=>{ if(t) t.remove(); clearTimeout(timer); t=document.createElement("div"); t.className="toast"; t.textContent=msg; document.body.appendChild(t); timer=setTimeout(()=>{t&&t.remove();t=null;},String(msg).length>30?6000:2600); };})();
 const esc = s => String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const fmtDate = iso => iso ? new Date(iso).toLocaleString("zh-TW",{month:"numeric",day:"numeric",hour:"2-digit",minute:"2-digit"}) : "";
 const today = () => new Date().toISOString().slice(0,10);
@@ -783,7 +783,7 @@ function renderAdmin(){
     </div>
     ${e?.storage==="share"?`<div class="field"><label for="pFolder">專案資料夾名稱（會建立在各據點的資料夾底下）</label><input type="text" id="pFolder" value="${esc(e.shareFolder||safeFolder(e.title))}" placeholder="預設與專案名稱相同">
       <div class="meta">各據點會看到自己的路徑，例如桃園站：</div><div class="pathbox" id="pFolderEx"></div>
-      <div class="meta">據點仍在網站上填寫文字回覆；檔案放到共用資料夾後，到「儀表板」按「掃描共用資料夾」即可看到誰還沒放。</div></div>`:""}
+      <div class="meta">發布時會自動在各據點的資料夾底下建立這個專案資料夾（需用公司電腦的 Edge 或 Chrome）。據點仍在網站上填寫文字回覆；檔案放到共用資料夾後，到「儀表板」按「掃描共用資料夾」即可看到誰還沒放。</div></div>`:""}
     <div class="field"><label>公告附件</label><div id="pFileList">${filesHTML(e?.files||[],true)}</div>
       <div class="row"><input type="file" id="pFileInput" accept="image/*,application/pdf" multiple hidden><button type="button" class="btn sm" id="pAddFile">＋ 加入檔案</button><span class="meta" id="pUpMsg"></span></div></div>
     <div class="row"><button type="button" class="btn primary grow" id="pSave">${e&&e.id?"儲存變更":"發布公告"}</button>${e&&e.id?`<button type="button" class="btn" id="pCancel">取消</button>`:""}</div>
@@ -795,6 +795,7 @@ function renderAdmin(){
     return `<div class="card"><div class="row"><div class="grow title">${esc(p.title)}</div>${p.status==="closed"?`<span class="pill closed">已結案</span>`:`<span class="pill ok">進行中</span>`}</div>
     <div class="meta" style="margin-top:4px">${isShare(p)?"檔案放共用資料夾 · ":""}${p.deadline?"期限 "+esc(p.deadline)+" · ":""}回覆 ${countReplies(p.id)}/${SITES.length}${fileMeta}</div>
     <div class="row" style="margin-top:10px"><button type="button" class="btn sm" data-edit="${p.id}">編輯</button><button type="button" class="btn sm" data-toggle="${p.id}">${p.status==="closed"?"重新開放":"結案"}</button>${canClear?`<button type="button" class="btn sm" data-clear="${p.id}" ${S.clearing?"disabled":""}>清除附件</button>`:""}<button type="button" class="btn sm danger" data-del="${p.id}" ${busy?"disabled":""}>刪除</button></div>
+    ${S.scan&&S.scan.pid===p.id?`<div class="notice" style="margin-top:8px" id="scanProg">${S.scan.create?"建立資料夾並掃描":"掃描"}中 ${S.scan.done}/${S.scan.total}…</div>`:""}
     ${busy?`<div class="notice" style="margin-top:8px" id="clr-prog">清除中 ${S.clearing.done}/${S.clearing.total}…</div>`:""}
     ${canClear&&!busy?`<div id="clrc-${p.id}" hidden class="notice" style="margin-top:8px">將永久刪除此專案的 ${st.count} 個附件（${fmtSize(st.bytes)}），包含公告附件與各據點回覆的照片、PDF；文字回覆會保留。<span class="overdue">刪除後無法復原。</span><div class="row" style="margin-top:8px"><button type="button" class="btn sm danger" data-clear-yes="${p.id}">確定清除</button><button type="button" class="btn sm" data-clear-no="${p.id}">取消</button></div></div>`:""}
     <div id="confirm-${p.id}" hidden class="notice" style="margin-top:8px">確定要刪除此專案、所有回覆及附件？ <button type="button" class="btn sm danger" data-del-yes="${p.id}">確定刪除</button></div></div>`;
@@ -821,11 +822,27 @@ function renderAdmin(){
     const shareFolder = storage==="share" ? (safeFolder(document.getElementById("pFolder")?.value)||safeFolder(title)) : (d.shareFolder||"");
     if(storage==="share" && !shareFolder){toastEl("請輸入專案資料夾名稱");return;}
     const btn=document.getElementById("pSave"); btn.disabled=true;
+    /* 共用資料夾專案：發布（或改成共用資料夾、改了資料夾名稱）時，順便替各據點建立專案資料夾。
+       先在按下按鈕的當下取得資料夾權限，再存檔。手機或沒授權時照常發布，之後可到儀表板補建。 */
+    const old = d.id ? S.projects.find(x=>x.id===d.id) : null;
+    const needMk = storage==="share" && (!old || !isShare(old) || shareFolderOf(old)!==shareFolder);
+    let mk = false, why = "";
+    if(needMk){
+      if(!FS_OK) why="這台裝置無法連到共用資料夾";
+      else { try{ await shareRootHandle("readwrite"); mk=true; }catch(e){ why="沒有取得共用資料夾的權限"; } }
+    }
+    const done = d.id?"已儲存":"已發布";
+    let pid=d.id;
     try{
-      if(d.id){ await S.db.collection("projects").doc(d.id).update({title,body,deadline,files:d.files,storage,shareFolder}); toastEl("已儲存"); }
-      else { await S.db.collection("projects").add({title,body,deadline,files:d.files,storage,shareFolder,status:"open",createdAt:new Date().toISOString()}); toastEl("已發布"); }
+      if(d.id) await S.db.collection("projects").doc(d.id).update({title,body,deadline,files:d.files,storage,shareFolder});
+      else pid=(await S.db.collection("projects").add({title,body,deadline,files:d.files,storage,shareFolder,status:"open",createdAt:new Date().toISOString()})).id;
       S.editingProject=null; render();
-    }catch(e){ toastEl("儲存失敗，請再試一次"); btn.disabled=false; }
+    }catch(e){ toastEl("儲存失敗，請再試一次"); btn.disabled=false; return; }
+    if(!needMk){ toastEl(done); return; }
+    if(!mk){ toastEl(`${done}，但${why}，各據點的資料夾尚未建立。請用公司電腦到「儀表板」點進專案補建。`); return; }
+    toastEl(`${done}，正在建立各據點的專案資料夾…`);
+    for(let k=0;k<30;k++){ const q=S.projects.find(x=>x.id===pid); if(q && isShare(q) && shareFolderOf(q)===shareFolder && !S.scan) break; await new Promise(r=>setTimeout(r,100)); }
+    await scanShare(pid,{create:true});
   });
   document.getElementById("pCancel")?.addEventListener("click",()=>{S.editingProject=null;render();});
   app.querySelectorAll("[data-edit]").forEach(b=>b.addEventListener("click",()=>{ const p=S.projects.find(x=>x.id===b.dataset.edit); S.editingProject={id:p.id,title:p.title,body:p.body,deadline:p.deadline||"",files:[...(p.files||[])],storage:p.storage||"cloud",shareFolder:p.shareFolder||"",folderTouched:!!p.shareFolder}; render(); window.scrollTo({top:0}); }));
