@@ -64,7 +64,8 @@ textarea{min-height:110px;resize:vertical}
 .big{font-size:28px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.1}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:6px}
 .cell{border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:13px;display:flex;flex-direction:column;gap:2px;min-width:0}
-.cell.ok{background:var(--ok-soft);border-color:transparent;cursor:pointer}
+.cell.ok{background:var(--ok-soft);border-color:transparent}
+.cell.ok[data-site-open]{cursor:pointer}
 .cell.can{cursor:pointer}
 .cell.ok:active,.cell.focus{outline:2px solid var(--accent);outline-offset:-2px}
 .cell .code{font-family:var(--mono);font-size:11px;color:var(--muted)}
@@ -243,7 +244,7 @@ const S = {
   canEdit:false, fileCache:{},
   projects:[], replies:{}, loaded:false, loadErr:null,
   draft:{}, uploading:false, editingProject:null, acct:null,
-  shareCfg:null, shareDraft:null, scan:null, autoScan:null, rootHandle:null,
+  shareCfg:null, shareDraft:null, rm:null, scan:null, autoScan:null, rootHandle:null,
   store:null, clearing:null, orphanJob:null, orphConfirm:false, focusSite:null, editSite:null, zipping:null, filter:"all"
 };
 const LS = { get:k=>{try{return localStorage.getItem(k);}catch(e){return null;}}, set:(k,v)=>{try{localStorage.setItem(k,v);}catch(e){}}, del:k=>{try{localStorage.removeItem(k);}catch(e){}} };
@@ -419,7 +420,7 @@ function renderPick(first){
 
 function projectCardHTML(p, opts={}){
   const total=SITES.length, done=countReplies(p.id);
-  const mine = S.site ? !!S.replies[replyKey(p.id,S.site)] : false;
+  const mine = S.site ? isDone(p.id,S.site) : false;
   const status = p.status==="closed" ? `<span class="pill closed">已結案</span>` : (mine ? `<span class="pill ok">本據點已回覆</span>` : `<span class="pill no">本據點未回覆</span>`);
   const dl = p.deadline ? `<span class="${isOverdue(p)?"overdue":""}">期限 ${esc(p.deadline)}${isOverdue(p)?"（已逾期）":""}</span>` : "";
   return `<div class="card clickable" data-pid="${p.id}">
@@ -428,7 +429,9 @@ function projectCardHTML(p, opts={}){
     <div class="bar" style="margin-top:8px"><i style="width:${Math.round(done/total*100)}%"></i></div>
   </div>`;
 }
-function countReplies(pid){ return SITES.filter(s=>S.replies[replyKey(pid,s.code)]).length; }
+/* 「已回覆」＝有在網站回覆，或（共用資料夾專案）上次掃描時資料夾裡已有檔案 */
+function isDone(pid,code){ if(S.replies[replyKey(pid,code)]) return true; const p=S.projects.find(x=>x.id===pid); return isShare(p) && !!shareRel(code) && hasShareFile(p,code); }
+function countReplies(pid){ return SITES.filter(s=>isDone(pid,s.code)).length; }
 function sortedProjects(){ return [...S.projects].sort((a,b)=>(a.status===b.status?0:a.status==="open"?-1:1)||(b.createdAt||"").localeCompare(a.createdAt||"")); }
 
 function renderHome(){
@@ -502,7 +505,7 @@ function renderProject(){
     </div>
     <div class="card">
       <div class="section-h">${esc(site.name)}${showCode(site)?`（${site.code}）`:""}的回覆</div>
-      ${r?`<div class="meta" style="margin-top:4px">最後更新 ${fmtDate(r.updatedAt)}</div>`:""}
+      ${r?`<div class="meta" style="margin-top:4px">最後更新 ${fmtDate(r.updatedAt)}</div>`:isDone(p.id,S.site)?`<div class="meta" style="margin-top:4px">已在共用資料夾放入檔案，視為已回覆；如有需要仍可在下方補充說明。</div>`:""}
       ${canReply?`
       <div class="form" style="margin-top:10px">
         <div class="field"><label for="replyText">回覆內容</label><textarea id="replyText" placeholder="請填寫本據點的確認結果或說明">${esc(d.text)}</textarea></div>
@@ -625,11 +628,11 @@ const noFileSites = p => shareSites().filter(s=>!hasShareFile(p,s.code));
 function passFilter(pid,s){
   if(S.view!=="dash" || S.filter==="all") return true;
   if(S.filter==="nofile"){ const p=S.projects.find(x=>x.id===pid); return !!shareRel(s.code) && !hasShareFile(p,s.code); }
-  const r=!!S.replies[replyKey(pid,s.code)]; return S.filter==="pending"?!r:r;
+  const r=isDone(pid,s.code); return S.filter==="pending"?!r:r;
 }
 function filterBarHTML(pid){
   const p=S.projects.find(x=>x.id===pid), sh=isShare(p);
-  const pending=SITES.filter(s=>!S.replies[replyKey(pid,s.code)]).length;
+  const pending=SITES.filter(s=>!isDone(pid,s.code)).length;
   const btn=(k,t)=>`<button type="button" class="btn sm" data-filter="${k}" aria-pressed="${S.filter===k}" style="${S.filter===k?"background:var(--accent);color:var(--accent-fg);border-color:var(--accent)":""}">${t}</button>`;
   const nofile = sh&&p.shareScan ? noFileSites(p).length : null;
   const canCopy = (S.filter==="pending"&&pending) || (S.filter==="nofile"&&nofile);
@@ -639,7 +642,7 @@ function bindFilter(pid){
   app.querySelectorAll("[data-filter]").forEach(b=>b.addEventListener("click",()=>{ S.filter=b.dataset.filter; render(); }));
   document.getElementById("copyPending")?.addEventListener("click",async()=>{
     const p=S.projects.find(x=>x.id===pid), nf=S.filter==="nofile";
-    const miss = s => nf ? (!!shareRel(s.code) && !hasShareFile(p,s.code)) : !S.replies[replyKey(pid,s.code)];
+    const miss = s => nf ? (!!shareRel(s.code) && !hasShareFile(p,s.code)) : !isDone(pid,s.code);
     const txt=SECTIONS.map(sec=>{ const l=sec.list.filter(miss); return l.length?`【${sec.label}】${l.map(s=>s.name).join("、")}`:""; }).filter(Boolean).join("\n");
     try{ await navigator.clipboard.writeText(txt); toastEl("已複製名單"); }catch(e){ toastEl("無法複製，請手動選取"); }
   });
@@ -653,10 +656,10 @@ function replyPreviewHTML(r){
 function statusGridHTML(pid){
   const p=S.projects.find(x=>x.id===pid);
   return SECTIONS.map(sec=>{
-    const all=sec.list, done=all.filter(s=>S.replies[replyKey(pid,s.code)]).length, list=all.filter(s=>passFilter(pid,s));
+    const all=sec.list, done=all.filter(s=>isDone(pid,s.code)).length, list=all.filter(s=>passFilter(pid,s));
     if(!list.length) return "";
     return `<div class="group-h"><span>${sec.label}</span><span>${done}/${all.length}</span></div>
-    <div class="grid">${list.map(s=>{const r=S.replies[replyKey(pid,s.code)];const ed=!!p&&canEditReply(p,s.code);return `<div class="cell ${r?"ok":ed?"can":""}${S.focusSite===s.code&&S.view==="dash"?" focus":""}" ${r||ed?`data-site-open="${s.code}" data-pid="${pid}" role="button" tabindex="0"`:""}>${showCode(s)?`<span class="code">${s.code}</span>`:""}<span class="nm">${esc(s.name)}</span>${r?replyPreviewHTML(r):`<span class="st">${ed&&!S.canEdit?"未回覆・點此回覆":"未回覆"}</span>`}${shareCellHTML(p,s.code)}</div>`;}).join("")}</div>`;
+    <div class="grid">${list.map(s=>{const r=S.replies[replyKey(pid,s.code)];const ed=!!p&&canEditReply(p,s.code);const fd=!r&&isDone(pid,s.code);return `<div class="cell ${r||fd?"ok":ed?"can":""}${S.focusSite===s.code&&S.view==="dash"?" focus":""}" ${r||ed?`data-site-open="${s.code}" data-pid="${pid}" role="button" tabindex="0"`:""}>${showCode(s)?`<span class="code">${s.code}</span>`:""}<span class="nm">${esc(s.name)}</span>${r?replyPreviewHTML(r):`<span class="st">${fd?"已放檔案":ed&&!S.canEdit?"未回覆・點此回覆":"未回覆"}</span>`}${shareCellHTML(p,s.code)}</div>`;}).join("")}</div>`;
   }).join("");
 }
 
@@ -749,7 +752,7 @@ async function downloadProjectZip(p){
     const rf=root.folder("各據點回覆");
     for(const s of SITES){
       const r=S.replies[replyKey(p.id,s.code)];
-      if(!r){ rows.push([s.code,s.name,s.group,"未回覆","","",0,...shCols(s)]); continue; }
+      if(!r){ rows.push([s.code,s.name,s.group,isDone(p.id,s.code)?"已回覆（僅放檔案）":"未回覆","","",0,...shCols(s)]); continue; }
       rows.push([s.code,s.name,s.group,"已回覆",r.updatedAt?new Date(r.updatedAt).toLocaleString("zh-TW"):"",r.text||"",(r.files||[]).length,...shCols(s)]);
       const sf=rf.folder(safeName(`${s.code}_${s.name}`));
       sf.file("回覆內容.txt",`據點：${s.name}（${s.code}）\n回覆時間：${r.updatedAt?new Date(r.updatedAt).toLocaleString("zh-TW"):""}\n\n${r.text||"（僅附件）"}\n`);
@@ -796,8 +799,8 @@ function renderAdmin(){
     ${canClear&&!busy?`<div id="clrc-${p.id}" hidden class="notice" style="margin-top:8px">將永久刪除此專案的 ${st.count} 個附件（${fmtSize(st.bytes)}），包含公告附件與各據點回覆的照片、PDF；文字回覆會保留。<span class="overdue">刪除後無法復原。</span><div class="row" style="margin-top:8px"><button type="button" class="btn sm danger" data-clear-yes="${p.id}">確定清除</button><button type="button" class="btn sm" data-clear-no="${p.id}">取消</button></div></div>`:""}
     <div id="confirm-${p.id}" hidden class="notice" style="margin-top:8px">確定要刪除此專案、所有回覆及附件？ <button type="button" class="btn sm danger" data-del-yes="${p.id}">確定刪除</button></div></div>`;
   }).join("");
-  app.innerHTML = form + `<div class="card" id="shareBox">${shareCfgInner()}</div>` + `<div class="card" id="acctBox">${acctInner()}</div>` + `<div class="card" id="storageBox">${storageInner()}</div>` + `<div class="section-h">所有專案</div>` + (list||`<div class="card empty">尚無專案</div>`);
-  bindStorage(); bindAcct(); bindShareCfg();
+  app.innerHTML = form + `<div class="card" id="shareBox">${shareCfgInner()}</div>` + `<div class="card" id="rmBox">${rmInner()}</div>` + `<div class="card" id="acctBox">${acctInner()}</div>` + `<div class="card" id="storageBox">${storageInner()}</div>` + `<div class="section-h">所有專案</div>` + (list||`<div class="card empty">尚無專案</div>`);
+  bindStorage(); bindAcct(); bindShareCfg(); bindRm();
   const d = S.editingProject || (S.editingProject={files:[]}); d.files=d.files||[];
   const exEl=document.getElementById("pFolderEx"), fEl=document.getElementById("pFolder");
   const showEx=()=>{ if(exEl) exEl.textContent=`${shareRoot()}\\${shareRel("SD0")||"（據點資料夾）"}\\${safeFolder(fEl.value)||safeFolder(d.title)||"（專案資料夾）"}`; };
@@ -936,7 +939,7 @@ function shareScanCardHTML(p){
   return `<div class="card"><div class="section-h">共用資料夾繳交狀況</div>
     <div class="meta" style="margin-top:4px">${summary}${unset?` · ${unset} 個據點未設定資料夾`:""}</div>
     ${busy?`<div class="notice" style="margin-top:8px" id="scanProg">${S.scan.create?"建立資料夾並掃描":"掃描"}中 ${S.scan.done}/${S.scan.total}…</div>`:
-    FS_OK?`<div class="row" style="margin-top:10px"><button type="button" class="btn sm primary" id="scanBtn">掃描共用資料夾</button><button type="button" class="btn sm" id="scanMk">建立各據點的專案資料夾</button><button type="button" class="btn sm" id="scanPick">重新選擇根目錄</button></div>
+    FS_OK?`<div class="row" style="margin-top:10px"><button type="button" class="btn sm primary" id="scanBtn">掃描共用資料夾</button><button type="button" class="btn sm" id="scanMk">建立各據點的專案資料夾</button><button type="button" class="btn sm" id="scanPick">重新選擇根目錄</button><button type="button" class="btn sm danger" id="scanRm">刪除各據點的專案資料夾</button></div>
       <label class="row meta" style="margin-top:8px;gap:6px;cursor:pointer"><input type="checkbox" id="scanAuto" ${S.autoScan&&S.autoScan.pid===p.id?"checked":""}>每 5 分鐘自動重新掃描（此頁面開著時）</label>
       <div class="meta" style="margin-top:6px">第一次使用時會請您選擇資料夾，請選「${esc(rootName)}」這一層。掃描只讀取檔案數量與時間，不會上傳檔案。</div>`
     :`<div class="notice" style="margin-top:8px">掃描功能需要在連得到共用資料夾的公司電腦上，用 Edge 或 Chrome 開啟本網站。手機與其他瀏覽器只能查看上次掃描的結果。</div>`}
@@ -949,6 +952,109 @@ function bindShareScan(p){
   document.getElementById("scanMk")?.addEventListener("click",()=>scanShare(p.id,{create:true}));
   document.getElementById("scanPick")?.addEventListener("click",()=>scanShare(p.id,{pick:true}));
   document.getElementById("scanAuto")?.addEventListener("change",ev=>{ setAutoScan(p.id,ev.target.checked); if(ev.target.checked) scanShare(p.id); });
+  document.getElementById("scanRm")?.addEventListener("click",()=>{
+    S.rm={name:shareFolderOf(p),phase:"idle"}; S.view="admin"; S.projectId=null; S.focusSite=null; S.editSite=null; S.filter="all"; try{location.hash="admin";}catch(e){}
+    render(); document.getElementById("rmBox")?.scrollIntoView({block:"start"}); rmCheck();
+  });
+}
+
+/* ---------- 刪除各據點的專案資料夾（管理者，用公司電腦的 Edge / Chrome） ----------
+   只會刪除「各據點資料夾底下、名稱完全相同的那一層資料夾」，例如 …\五股\測試專案。
+   流程：輸入資料夾名稱 → 檢查（列出哪些據點有、裡面有幾個檔案）→ 確認 → 刪除。
+   資料夾裡有檔案時，必須再輸入一次資料夾名稱才能刪除。網路磁碟刪除後不會進資源回收筒。 */
+async function countAll(dir,acc){ for await (const [name,h] of dir.entries()){ if(h.kind==="file"){ if(!FS_SKIP.test(name)) acc.n++; } else await countAll(h,acc); } }
+function rmState(){ return S.rm || (S.rm={name:"",phase:"idle"}); }
+function rmInner(){
+  const R=rmState();
+  const names=[...new Set(S.projects.filter(isShare).map(shareFolderOf).filter(Boolean))];
+  const head=`<div class="section-h">刪除各據點的專案資料夾</div>
+    <div class="meta" style="margin-top:4px">把各據點資料夾底下「同一個名稱」的專案資料夾一次刪除，例如測試用的專案。會先檢查並列出結果，確認後才刪除。</div>`;
+  if(!FS_OK) return head+`<div class="notice" style="margin-top:8px">此功能需要在連得到共用資料夾的公司電腦上，用 Edge 或 Chrome 開啟本網站。</div>`;
+  if(R.phase==="busy") return head+`<div class="notice" style="margin-top:10px" id="rmProg">${R.label}中 ${R.done}/${R.total}…請勿關閉此頁</div>`;
+  const nm=`「${esc(R.name)}」`, sn=c=>esc(siteByCode[c]?.name||c);
+  if(R.phase==="ready"){
+    const F=R.found, withF=F.filter(x=>x.n||x.err), empty=F.length-withF.length, files=withF.reduce((a,x)=>a+x.n,0);
+    const info=`<div style="margin-top:10px">共檢查 ${R.total} 個據點，其中 <b>${F.length}</b> 個據點有 ${nm} 資料夾。${R.lost?`<span class="meta">（另有 ${R.lost} 個據點找不到據點資料夾，已略過）</span>`:""}</div>`;
+    if(!F.length) return head+info+`<div class="row" style="margin-top:10px"><button type="button" class="btn sm" id="rmCancel">返回</button></div>`;
+    const ex=`<div class="meta" style="margin-top:6px">例如：</div><div class="pathbox">${esc(shareRoot()+"\\"+shareRel(F[0].code)+"\\"+R.name)}</div>`;
+    if(!withF.length) return head+info+ex+`<div class="meta" style="margin-top:8px">這些資料夾都是空的：${F.map(x=>sn(x.code)).join("、")}</div>
+      <div class="row" style="margin-top:10px"><button type="button" class="btn sm danger" id="rmEmpty">刪除這 ${F.length} 個空資料夾</button><button type="button" class="btn sm" id="rmCancel">取消</button></div>`;
+    return head+info+ex+`
+      <div style="margin-top:10px"><span class="overdue">其中 ${withF.length} 個據點的資料夾裡有檔案（共 ${files} 個）：</span>${withF.map(x=>`${sn(x.code)}（${x.err?"無法讀取":x.n+" 個"}）`).join("、")}</div>
+      ${empty?`<div class="row" style="margin-top:10px"><button type="button" class="btn sm" id="rmEmpty">只刪除空的資料夾（${empty} 個）</button><span class="meta">有檔案的資料夾會保留</span></div>`:""}
+      <div class="form" style="margin-top:12px;border-top:1px solid var(--line);padding-top:12px">
+        <div class="field"><label for="rmTyped">若要連同檔案一起刪除，請在下方再輸入一次資料夾名稱 ${nm}</label><input type="text" id="rmTyped" value="${esc(R.typed||"")}" autocomplete="off"></div>
+        <div><span class="overdue">刪除後無法復原，共用資料夾的檔案不會進資源回收筒。</span></div>
+        <div class="row"><button type="button" class="btn sm danger" id="rmAll" ${R.typed===R.name?"":"disabled"}>連同檔案全部刪除（${F.length} 個資料夾、${files} 個檔案）</button><button type="button" class="btn sm" id="rmCancel">取消</button></div>
+      </div>`;
+  }
+  if(R.phase==="done"){
+    const r=R.res;
+    return head+`<div style="margin-top:10px">已刪除 <b>${r.ok.length}</b> 個據點的 ${nm} 資料夾。</div>
+      ${r.skipped.length?`<div class="meta" style="margin-top:6px">保留（裡面有檔案）：${r.skipped.map(sn).join("、")}</div>`:""}
+      ${r.fail.length?`<div style="margin-top:6px"><span class="overdue">刪除失敗（${r.fail.length}）：</span>${r.fail.map(sn).join("、")}。可能是檔案正被開啟，或沒有刪除權限。</div>`:""}
+      <div class="row" style="margin-top:10px"><button type="button" class="btn sm" id="rmCancel">完成</button></div>`;
+  }
+  return head+`<div class="form" style="margin-top:10px">
+      <div class="field"><label for="rmName">要刪除的專案資料夾名稱</label><input type="text" id="rmName" list="rmNames" value="${esc(R.name||"")}" placeholder="例：測試專案" autocomplete="off"><datalist id="rmNames">${names.map(n=>`<option value="${esc(n)}"></option>`).join("")}</datalist></div>
+      <div class="row"><button type="button" class="btn sm" id="rmCheck">檢查各據點</button><span class="meta grow">這一步只檢查，不會刪除任何東西</span></div>
+    </div>`;
+}
+function renderRm(){ const box=document.getElementById("rmBox"); if(box){ box.innerHTML=rmInner(); bindRm(); } }
+function bindRm(){
+  const R=rmState();
+  document.getElementById("rmName")?.addEventListener("input",ev=>{ R.name=ev.target.value; });
+  document.getElementById("rmCheck")?.addEventListener("click",()=>rmCheck());
+  document.getElementById("rmCancel")?.addEventListener("click",()=>{ S.rm=null; renderRm(); });
+  document.getElementById("rmTyped")?.addEventListener("input",ev=>{ R.typed=ev.target.value.trim(); const b=document.getElementById("rmAll"); if(b) b.disabled=R.typed!==R.name; });
+  document.getElementById("rmEmpty")?.addEventListener("click",()=>rmRun(false));
+  document.getElementById("rmAll")?.addEventListener("click",()=>{ if(R.typed===R.name) rmRun(true); });
+}
+const rmProg = R => { const el=document.getElementById("rmProg"); if(el) el.textContent=`${R.label}中 ${R.done}/${R.total}…請勿關閉此頁`; };
+async function rmCheck(){
+  const R=rmState(), name=String(R.name||"").trim();
+  if(!S.canEdit || R.phase==="busy") return;
+  if(!name){ toastEl("請輸入專案資料夾名稱"); return; }
+  if(name!==safeFolder(name)){ toastEl('資料夾名稱不能含有 \\ / : * ? " < > | ，結尾也不能是句點或空白'); return; }
+  let root;
+  try{ root=await shareRootHandle("readwrite"); }
+  catch(e){ if(e?.name!=="AbortError") toastEl("無法開啟共用資料夾，請再按一次"); return; }
+  const sites=shareSites(), found=[]; let i=0, lost=0;
+  Object.assign(R,{name,phase:"busy",label:"檢查",done:0,total:sites.length,typed:"",res:null}); renderRm();
+  const worker=async()=>{ while(i<sites.length){ const s=sites[i++]; let sd=null;
+    try{ sd=await dirAt(root,shareRel(s.code)); }catch(e){ lost++; }
+    if(sd){ let pd=null; try{ pd=await sd.getDirectoryHandle(name); }catch(e){}
+      if(pd){ const acc={n:0}; let err=false; try{ await countAll(pd,acc); }catch(e){ err=true; } found.push({code:s.code,n:acc.n,err}); } }
+    R.done++; rmProg(R); } };
+  await Promise.all(Array.from({length:5},worker));
+  const order=Object.fromEntries(SITES.map((s,k)=>[s.code,k])); found.sort((a,b)=>order[a.code]-order[b.code]);
+  if(lost===sites.length){ S.rm={name,phase:"idle"}; renderRm(); toastEl("找不到任何據點資料夾，請確認選的是根目錄資料夾"); return; }
+  Object.assign(R,{phase:"ready",found,lost}); renderRm();
+}
+async function rmRun(all){
+  const R=rmState(); if(!S.canEdit || R.phase!=="ready") return;
+  const name=R.name, list=R.found.filter(x=>all || (x.n===0 && !x.err));
+  let root;
+  try{ root=await shareRootHandle("readwrite"); }
+  catch(e){ if(e?.name!=="AbortError") toastEl("無法開啟共用資料夾，請再按一次"); return; }
+  const ok=[], fail=[], skipped=all?[]:R.found.filter(x=>x.n||x.err).map(x=>x.code);
+  Object.assign(R,{phase:"busy",label:"刪除",done:0,total:list.length}); renderRm();
+  for(const x of list){
+    try{
+      const sd=await dirAt(root,shareRel(x.code));
+      let keep=false;
+      if(!all){ const acc={n:0}; await countAll(await sd.getDirectoryHandle(name),acc); keep=acc.n>0; }   // 刪除前再確認一次仍是空的
+      if(keep) skipped.push(x.code); else { await sd.removeEntry(name,{recursive:true}); ok.push(x.code); }
+    }catch(e){ fail.push(x.code); }
+    R.done++; rmProg(R);
+  }
+  /* 用這個資料夾名稱的專案：把掃描結果同步成「尚未建立資料夾」 */
+  for(const p of S.projects.filter(p=>isShare(p) && p.shareScan && shareFolderOf(p)===name)){
+    const sites={...(p.shareScan.sites||{})}; ok.forEach(c=>{ sites[c]={n:0,e:"folder"}; });
+    try{ await S.db.collection("projects").doc(p.id).update({shareScan:{...p.shareScan,sites}}); }catch(e){}
+  }
+  S.rm={name,phase:"done",res:{ok,fail,skipped}}; renderRm();
+  toastEl(fail.length?`已刪除 ${ok.length} 個，${fail.length} 個失敗`:`已刪除 ${ok.length} 個資料夾`);
 }
 
 /* ---------- 據點帳號（建立尚未建立的帳號，密碼只顯示一次） ---------- */
@@ -1093,7 +1199,7 @@ render();
   S.auth.onAuthStateChanged(user=>{
     S.unsub.forEach(f=>{try{f();}catch(e){}}); S.unsub=[];
     setAutoScan(null,false);
-    Object.assign(S,{shareCfg:null,shareDraft:null,scan:null,projects:[],replies:{},loaded:false,loadErr:null,draft:{},editingProject:null,store:null,acct:null,projectId:null,focusSite:null,editSite:null,filter:"all"});
+    Object.assign(S,{shareCfg:null,shareDraft:null,rm:null,scan:null,projects:[],replies:{},loaded:false,loadErr:null,draft:{},editingProject:null,store:null,acct:null,projectId:null,focusSite:null,editSite:null,filter:"all"});
     const code = user ? codeOf(user.email) : null;
     if(user && !code){ toastEl("這個帳號不是據點帳號，已登出"); S.auth.signOut(); return; }
     S.user=user||null; S.me=code; S.canEdit=(code===ADMIN_CODE);
