@@ -153,6 +153,14 @@ const FIREBASE_CONFIG = {
 };
 const ACCOUNT_DOMAIN = FIREBASE_CONFIG.authDomain;   // 帳號網域（不必改）
 const ADMIN_CODE = "ADMIN";
+
+/* 據點第一次登入的密碼。登入後系統會要求先改成自己的密碼（至少 6 個字）才能使用。
+   Firebase 規定密碼至少 6 個字，所以不足 6 個字的密碼（例如 1234）送給 Firebase 前會自動在後面補上 PW_PAD，
+   同仁輸入時不用管這段；6 個字以上的密碼原樣送出，以前建立的帳號與已改好的密碼都照常可用。
+   ★ PW_PAD 設定後請勿再改，否則還在用 1234 的據點會登入不了。 */
+const INIT_PW = "1234";
+const PW_PAD = "#pstw-init";
+const realPw = p => { p=String(p||""); return p.length>=6 ? p : p+PW_PAD; };
 /* ===================================================================== */
 
 /* ---------- 據點資料 ---------- */
@@ -179,6 +187,21 @@ const emailOf = code => code.toLowerCase()+"@"+ACCOUNT_DOMAIN;
 const codeOf = email => { const m=String(email||"").toLowerCase().match(/^([a-z0-9]+)@(.+)$/); if(!m||m[2]!==ACCOUNT_DOMAIN.toLowerCase()) return null; const c=m[1].toUpperCase(); return (c===ADMIN_CODE||siteByCode[c])?c:null; };
 const siteLabel = s => s ? (showCode(s)?`${s.code} ${s.name}`:s.name) : "";
 
+/* ---------- 專案對象（要哪些單位回覆） ----------
+   存在專案的 groups 欄位，值是據點代碼的第一個字母：S＝服務站、B＝營業所、F＝工廠。
+   舊專案沒有這個欄位，視為三種都納入。不在對象內的據點看不到該專案，也不列入統計。 */
+const GROUP_KEYS = [{k:"S",label:"服務站"},{k:"B",label:"營業所"},{k:"F",label:"工廠"}];
+const ALL_GROUPS = GROUP_KEYS.map(g=>g.k);
+const gkOf = s => String(s?.code||"").charAt(0);
+function projGroups(p){ const g=Array.isArray(p?.groups)?ALL_GROUPS.filter(k=>p.groups.includes(k)):[]; return g.length?g:ALL_GROUPS; }
+const inProj = (p,s) => !!p && !!s && projGroups(p).includes(gkOf(s));
+const projSites = p => SITES.filter(s=>inProj(p,s));
+const projTotal = p => projSites(p).length;
+const projSections = p => SECTIONS.map(sec=>({...sec,list:sec.list.filter(s=>inProj(p,s))})).filter(sec=>sec.list.length);
+const groupsText = p => { const g=projGroups(p); return g.length===ALL_GROUPS.length ? "服務站、營業所、工廠" : g.map(k=>GROUP_KEYS.find(x=>x.k===k).label).join("、"); };
+/* 這個專案跟目前畫面上的據點有沒有關係（管理者沒選代理據點時全部都算） */
+const forMe = p => (S.canEdit && !S.site) || inProj(p, siteByCode[S.site]);
+
 /* ---------- 公司共用資料夾 ----------
    專案可以選擇據點的檔案要「上傳到網站（雲端）」或「放到公司共用資料夾」。
    選共用資料夾時，各據點看到的路徑＝ 根目錄 \ 據點資料夾 \ 專案資料夾。
@@ -202,10 +225,11 @@ const isShare = p => !!p && p.storage==="share";
 const safeFolder = n => String(n||"").replace(/[\\/:*?"<>|\u0000-\u001f]/g,"_").replace(/[. ]+$/,"").trim().slice(0,80);
 const shareFolderOf = p => safeFolder(p.shareFolder||p.title);
 function sharePath(p,code){ const rel=shareRel(code); return rel ? `${shareRoot()}\\${rel}\\${shareFolderOf(p)}` : ""; }
-const shareSites = () => SITES.filter(s=>shareRel(s.code));
+/* 有設定共用資料夾的據點；給了專案時，只算該專案的對象 */
+const shareSites = p => SITES.filter(s=>shareRel(s.code) && (!p || inProj(p,s)));
 const scanOf = (p,code) => p?.shareScan?.sites?.[code] || null;
 const hasShareFile = (p,code) => (scanOf(p,code)?.n||0) > 0;
-const shareFileCount = p => shareSites().filter(s=>hasShareFile(p,s.code)).length;
+const shareFileCount = p => shareSites(p).filter(s=>hasShareFile(p,s.code)).length;
 function shareStatusText(p,code){
   if(!shareRel(code)) return "未設定資料夾";
   const x=scanOf(p,code); if(!p.shareScan||!x) return "尚未掃描";
@@ -325,13 +349,13 @@ function renderLogin(){
     <div class="field"><label for="loginSite">據點</label><select id="loginSite"><option value="" ${last?"":"selected"} disabled>請選擇據點</option>${opts}</select></div>
     <div class="field"><label for="loginPass">密碼</label><input type="password" id="loginPass" placeholder="據點密碼" autocomplete="current-password"></div>
     <button type="button" class="btn primary" id="loginGo">登入</button>
-    <div class="meta">忘記密碼請洽管理者重新設定。</div></div>`;
+    <div class="meta">第一次登入請用管理者通知的初始密碼，登入後會請您改成自己的密碼。忘記密碼請洽管理者重新設定。</div></div>`;
   const sel=document.getElementById("loginSite"), inp=document.getElementById("loginPass"), btn=document.getElementById("loginGo");
   const go=async()=>{
     if(!sel.value){ toastEl("請先選擇據點"); return; }
     if(!inp.value){ toastEl("請輸入密碼"); return; }
     btn.disabled=true; btn.textContent="登入中…";
-    try{ LS.set("loginSite",sel.value); S.lastPw=inp.value; await S.auth.signInWithEmailAndPassword(emailOf(sel.value), inp.value); }
+    try{ LS.set("loginSite",sel.value); S.lastPw=inp.value; await S.auth.signInWithEmailAndPassword(emailOf(sel.value), realPw(inp.value)); }
     catch(e){ S.lastPw=null; toastEl(authMsg(e)); btn.disabled=false; btn.textContent="登入"; }
   };
   btn.addEventListener("click",go);
@@ -350,7 +374,7 @@ function renderAccount(){
       ? (s?`目前代 <b>${esc(siteLabel(s))}</b> 檢視與回覆。管理者可代任何據點回覆。`:"尚未選擇代理的據點。")
       : "您目前以此據點登入，只能新增或修改本據點的回覆。若要回覆其他據點，請登出後用該據點的帳號登入。"}</div>
     <div class="row">${S.canEdit?`<button type="button" class="btn" id="accPick">切換代理據點</button>`:""}<button type="button" class="btn" id="accPw">修改密碼</button><button type="button" class="btn danger" id="accOut">登出</button><button type="button" class="btn" id="accBack">返回</button></div>
-    ${!S.canEdit&&!pwChanged()?`<div class="meta">本據點目前仍使用管理者發的初始密碼，建議按「修改密碼」換成自己的密碼。</div>`:""}
+    ${!S.canEdit&&!pwChanged()?`<div class="meta">本據點目前仍使用初始密碼，請按「修改密碼」換成自己的密碼。</div>`:""}
   </div>`;
   document.getElementById("accPw").addEventListener("click",()=>{ S.view="password"; render(); });
   document.getElementById("accPick")?.addEventListener("click",()=>{ S.view="pick"; render(); });
@@ -360,11 +384,12 @@ function renderAccount(){
 
 /* ---------- 修改密碼 ----------
    是否換過密碼記在 Firebase 帳號本身的 displayName（PW_MARK），不必動 Firestore 規則；
-   管理者刪除帳號重建後標記會消失，該據點下次登入會再被請去換密碼。 */
+   管理者刪除帳號重建、或用「把舊的隨機密碼改成 1234」重設後，標記會消失，該據點下次登入必須先改密碼。
+   用初始密碼登入的據點一律必須先改密碼，改好之前不能使用其他功能（沒有「先沿用」的選項）。 */
 const PW_MARK="pw-set", PW_MIN=6;
 const pwChanged = () => !!S.user && S.user.displayName===PW_MARK;
-const pwSkipKey = () => "pwSkip_"+(S.me||"");
-function needFirstPw(){ return !!S.user && !S.canEdit && !pwChanged() && LS.get(pwSkipKey())!=="1"; }
+const pwDoneKey = () => "pwDone_"+(S.me||"");   // 只在「密碼已改好、但標記寫入失敗」時記在這台裝置，避免一直被要求改密碼
+function needFirstPw(){ return !!S.user && !S.canEdit && (S.lastPw===INIT_PW || (!pwChanged() && LS.get(pwDoneKey())!=="1")); }
 function pwMsg(e){
   const c=e?.code||"";
   if(/invalid-credential|wrong-password|invalid-login/.test(c)) return "目前的密碼不正確";
@@ -377,14 +402,14 @@ function pwMsg(e){
 function renderPassword(first){
   const s=siteByCode[S.site], askOld=!S.lastPw;
   app.innerHTML=`<div class="card form">
-    <div class="title">${first?"請設定本據點的新密碼":"修改密碼"}</div>
+    <div class="title">${first?"請先設定本據點的新密碼":"修改密碼"}</div>
     <div class="meta">${first
-      ? `這是 <b>${esc(S.canEdit?"管理者":siteLabel(s))}</b> 第一次登入。請把管理者發的初始密碼換成本據點自己的密碼，之後登入都用新密碼。`
+      ? `<b>${esc(S.canEdit?"管理者":siteLabel(s))}</b> 目前使用的是初始密碼。請改成本據點自己的密碼，<b>改好後才能使用系統</b>，之後登入都用新密碼。`
       : `修改 <b>${esc(S.canEdit?"管理者":siteLabel(s))}</b> 的登入密碼。修改後，其他已登入此帳號的裝置需要用新密碼重新登入。`}</div>
     ${askOld?`<div class="field"><label for="pwOld">目前的密碼</label><input type="password" id="pwOld" autocomplete="current-password"></div>`:""}
     <div class="field"><label for="pwNew">新密碼（至少 ${PW_MIN} 個字）</label><input type="password" id="pwNew" autocomplete="new-password"></div>
     <div class="field"><label for="pwNew2">再輸入一次新密碼</label><input type="password" id="pwNew2" autocomplete="new-password"></div>
-    <div class="row"><button type="button" class="btn primary grow" id="pwSave">儲存新密碼</button><button type="button" class="btn" id="pwLater">${first?"先沿用原密碼":"取消"}</button></div>
+    <div class="row"><button type="button" class="btn primary grow" id="pwSave">儲存新密碼</button><button type="button" class="btn" id="pwLater">${first?"登出":"取消"}</button></div>
     <div class="meta">請記好新密碼並告知據點內需要登入的同仁；管理者查不到各據點自訂的密碼，忘記時只能請管理者重新設定。</div>
   </div>`;
   const $=id=>document.getElementById(id), btn=$("pwSave");
@@ -395,20 +420,21 @@ function renderPassword(first){
     if(n1.length<PW_MIN){ toastEl(`新密碼至少要 ${PW_MIN} 個字`); return; }
     if(n1!==n2){ toastEl("兩次輸入的新密碼不一樣"); return; }
     if(n1===oldPw){ toastEl("新密碼不能和目前的密碼相同"); return; }
+    if(n1===INIT_PW){ toastEl("新密碼不能是初始密碼"); return; }
     btn.disabled=true; btn.textContent="儲存中…";
     try{
       const u=S.auth.currentUser;
-      await u.reauthenticateWithCredential(firebase.auth.EmailAuthProvider.credential(u.email,oldPw));
-      await u.updatePassword(n1);
+      await u.reauthenticateWithCredential(firebase.auth.EmailAuthProvider.credential(u.email,realPw(oldPw)));
+      await u.updatePassword(realPw(n1));
       S.lastPw=n1;
-      try{ await u.updateProfile({displayName:PW_MARK}); }catch(e){ LS.set(pwSkipKey(),"1"); }
+      try{ await u.updateProfile({displayName:PW_MARK}); }catch(e){ LS.set(pwDoneKey(),"1"); }
       toastEl("密碼已更新，下次請用新密碼登入");
       leave();
     }catch(e){ toastEl(pwMsg(e)); btn.disabled=false; btn.textContent="儲存新密碼"; }
   };
   btn.addEventListener("click",go);
   $("pwNew2").addEventListener("keydown",e=>{ if(e.key==="Enter") go(); });
-  $("pwLater").addEventListener("click",()=>{ if(first) LS.set(pwSkipKey(),"1"); leave(); });
+  $("pwLater").addEventListener("click",()=>{ if(first) logout(); else leave(); });
   (askOld?$("pwOld"):$("pwNew")).focus();
 }
 
@@ -421,23 +447,25 @@ function renderPick(first){
 }
 
 function projectCardHTML(p, opts={}){
-  const total=SITES.length, done=countReplies(p.id);
+  const total=projTotal(p), done=countReplies(p.id);
   const mine = S.site ? isDone(p.id,S.site) : false;
-  const status = p.status==="closed" ? `<span class="pill closed">已結案</span>` : (mine ? `<span class="pill ok">本據點已回覆</span>` : `<span class="pill no">本據點未回覆</span>`);
+  const status = p.status==="closed" ? `<span class="pill closed">已結案</span>` : S.site && !inProj(p,siteByCode[S.site]) ? `<span class="pill no">本據點不需回覆</span>` : (mine ? `<span class="pill ok">本據點已回覆</span>` : `<span class="pill no">本據點未回覆</span>`);
   const dl = p.deadline ? `<span class="${isOverdue(p)?"overdue":""}">期限 ${esc(p.deadline)}${isOverdue(p)?"（已逾期）":""}</span>` : "";
+  const scope = projGroups(p).length<ALL_GROUPS.length ? `對象：${esc(groupsText(p))} · ` : "";
   return `<div class="card clickable" data-pid="${p.id}">
     <div class="row"><div class="grow title">${esc(p.title)}</div>${opts.noMine?"":status}</div>
-    <div class="row meta" style="margin-top:6px"><span>${dl}</span><span>${isShare(p)?"共用資料夾 · ":""}回覆 ${done}/${total}${isShare(p)&&p.shareScan?` · 已放檔 ${shareFileCount(p)}/${shareSites().length}`:""}</span></div>
-    <div class="bar" style="margin-top:8px"><i style="width:${Math.round(done/total*100)}%"></i></div>
+    <div class="row meta" style="margin-top:6px"><span>${dl}</span><span>${scope}${isShare(p)?"共用資料夾 · ":""}回覆 ${done}/${total}${isShare(p)&&p.shareScan?` · 已放檔 ${shareFileCount(p)}/${shareSites(p).length}`:""}</span></div>
+    <div class="bar" style="margin-top:8px"><i style="width:${total?Math.round(done/total*100):0}%"></i></div>
   </div>`;
 }
 /* 「已回覆」＝有在網站回覆，或（共用資料夾專案）上次掃描時資料夾裡已有檔案 */
 function isDone(pid,code){ if(S.replies[replyKey(pid,code)]) return true; const p=S.projects.find(x=>x.id===pid); return isShare(p) && !!shareRel(code) && hasShareFile(p,code); }
-function countReplies(pid){ return SITES.filter(s=>isDone(pid,s.code)).length; }
+/* 只算專案對象內的據點 */
+function countReplies(pid){ const p=S.projects.find(x=>x.id===pid); return projSites(p).filter(s=>isDone(pid,s.code)).length; }
 function sortedProjects(){ return [...S.projects].sort((a,b)=>(a.status===b.status?0:a.status==="open"?-1:1)||(b.createdAt||"").localeCompare(a.createdAt||"")); }
 
 function renderHome(){
-  const open=sortedProjects().filter(p=>p.status==="open"), closed=sortedProjects().filter(p=>p.status!=="open");
+  const mine=sortedProjects().filter(forMe), open=mine.filter(p=>p.status==="open"), closed=mine.filter(p=>p.status!=="open");
   app.innerHTML = (open.length?`<div class="section-h">進行中的專案</div>`+open.map(p=>projectCardHTML(p)).join(""):`<div class="card empty">目前沒有進行中的專案。<br>管理者建立公告後會出現在這裡。</div>`)
     + (closed.length?`<div class="section-h">已結案</div>`+closed.map(p=>projectCardHTML(p)).join(""):"");
   app.querySelectorAll("[data-pid]").forEach(c=>c.addEventListener("click",()=>{ S.projectId=c.dataset.pid; render(); }));
@@ -495,12 +523,12 @@ function renderProject(){
   const p=S.projects.find(x=>x.id===S.projectId); if(!p){S.projectId=null;return renderHome();}
   const key=replyKey(p.id,S.site), r=S.replies[key], site=siteByCode[S.site];
   const d = S.draft[key] || (S.draft[key]={text:r?.text||"",files:[...(r?.files||[])]});
-  const canReply = p.status==="open";
+  const need = inProj(p,site), canReply = p.status==="open" && need;
   app.innerHTML=`
     <button type="button" class="back" id="back">‹ 返回公告列表</button>
     <div class="card">
       <div class="row"><div class="grow title" style="font-size:18px">${esc(p.title)}</div>${p.status==="closed"?`<span class="pill closed">已結案</span>`:""}</div>
-      <div class="meta" style="margin-top:4px">${p.deadline?`期限 <span class="${isOverdue(p)?"overdue":""}">${esc(p.deadline)}</span> · `:""}發布 ${fmtDate(p.createdAt)}</div>
+      <div class="meta" style="margin-top:4px">${p.deadline?`期限 <span class="${isOverdue(p)?"overdue":""}">${esc(p.deadline)}</span> · `:""}發布 ${fmtDate(p.createdAt)} · 對象：${esc(groupsText(p))}</div>
       <div class="body-text" style="margin-top:10px">${esc(p.body)}</div>
       ${p.files&&p.files.length?`<div style="margin-top:10px">${filesHTML(p.files,false)}</div>`:""}
       ${p.archive&&p.status==="closed"?`<div class="meta" style="margin-top:10px">本專案已於 ${fmtDate(p.archive.at)} 結案，各據點的回覆與附件已存到公司共用資料夾。</div>`:p.filesClearedAt&&!(p.files&&p.files.length)?`<div class="meta" style="margin-top:10px">本專案附件已於 ${fmtDate(p.filesClearedAt)} 清除</div>`:""}
@@ -520,7 +548,7 @@ function renderProject(){
           </div>
         </div>`}
         <div class="row"><button type="button" class="btn primary grow" id="submitReply">${r?"更新回覆":"送出回覆"}</button></div>
-      </div>`:`<div class="body-text" style="margin-top:8px">${r?esc(r.text):"<span class='meta'>本據點未回覆，專案已結案。</span>"}</div>${r?`<div style="margin-top:8px">${replyAttachHTML(p,S.site,r)}</div>`:""}`}
+      </div>`:`<div class="body-text" style="margin-top:8px">${r?esc(r.text):need?"<span class='meta'>本據點未回覆，專案已結案。</span>":`<span class='meta'>本專案只需要${esc(groupsText(p))}回覆，本據點不需回覆。</span>`}</div>${r?`<div style="margin-top:8px">${replyAttachHTML(p,S.site,r)}</div>`:""}`}
     </div>
     <div class="card">
       <div class="section-h">各據點回覆狀況</div>
@@ -621,14 +649,14 @@ async function deleteReply(p,code){
   render();
 }
 /* 誰能改哪個據點的回覆：管理者全部可改；據點只能改自己，且專案需進行中（與 Firestore 規則一致） */
-function canEditReply(p,code){ return S.canEdit || (code===S.site && p.status==="open"); }
+function canEditReply(p,code){ return S.canEdit || (code===S.site && p.status==="open" && inProj(p,siteByCode[code])); }
 function startEdit(pid,code){
   const key=replyKey(pid,code), r=S.replies[key];
   S.draft[key]={text:r?.text||"",files:[...(r?.files||[])]};
   S.focusSite=code; S.editSite=code;
 }
 
-const noFileSites = p => shareSites().filter(s=>!hasShareFile(p,s.code));
+const noFileSites = p => shareSites(p).filter(s=>!hasShareFile(p,s.code));
 function passFilter(pid,s){
   if(S.view!=="dash" || S.filter==="all") return true;
   if(S.filter==="nofile"){ const p=S.projects.find(x=>x.id===pid); return !!shareRel(s.code) && !hasShareFile(p,s.code); }
@@ -636,18 +664,18 @@ function passFilter(pid,s){
 }
 function filterBarHTML(pid){
   const p=S.projects.find(x=>x.id===pid), sh=isShare(p);
-  const pending=SITES.filter(s=>!isDone(pid,s.code)).length;
+  const total=projTotal(p), pending=projSites(p).filter(s=>!isDone(pid,s.code)).length;
   const btn=(k,t)=>`<button type="button" class="btn sm" data-filter="${k}" aria-pressed="${S.filter===k}" style="${S.filter===k?"background:var(--accent);color:var(--accent-fg);border-color:var(--accent)":""}">${t}</button>`;
   const nofile = sh&&p.shareScan ? noFileSites(p).length : null;
   const canCopy = (S.filter==="pending"&&pending) || (S.filter==="nofile"&&nofile);
-  return `<div class="row" style="margin-top:8px">${btn("all","全部")}${btn("pending",`${sh?"尚未回覆":"尚未繳交"} ${pending}`)}${btn("done",`${sh?"已回覆":"已繳交"} ${SITES.length-pending}`)}${nofile!=null?btn("nofile",`尚未放檔案 ${nofile}`):""}${canCopy?`<button type="button" class="btn sm" id="copyPending">複製${S.filter==="nofile"?"未放檔案":sh?"未回覆":"未繳交"}名單</button>`:""}</div>`;
+  return `<div class="row" style="margin-top:8px">${btn("all","全部")}${btn("pending",`${sh?"尚未回覆":"尚未繳交"} ${pending}`)}${btn("done",`${sh?"已回覆":"已繳交"} ${total-pending}`)}${nofile!=null?btn("nofile",`尚未放檔案 ${nofile}`):""}${canCopy?`<button type="button" class="btn sm" id="copyPending">複製${S.filter==="nofile"?"未放檔案":sh?"未回覆":"未繳交"}名單</button>`:""}</div>`;
 }
 function bindFilter(pid){
   app.querySelectorAll("[data-filter]").forEach(b=>b.addEventListener("click",()=>{ S.filter=b.dataset.filter; render(); }));
   document.getElementById("copyPending")?.addEventListener("click",async()=>{
     const p=S.projects.find(x=>x.id===pid), nf=S.filter==="nofile";
     const miss = s => nf ? (!!shareRel(s.code) && !hasShareFile(p,s.code)) : !isDone(pid,s.code);
-    const txt=SECTIONS.map(sec=>{ const l=sec.list.filter(miss); return l.length?`【${sec.label}】${l.map(s=>s.name).join("、")}`:""; }).filter(Boolean).join("\n");
+    const txt=projSections(p).map(sec=>{ const l=sec.list.filter(miss); return l.length?`【${sec.label}】${l.map(s=>s.name).join("、")}`:""; }).filter(Boolean).join("\n");
     try{ await navigator.clipboard.writeText(txt); toastEl("已複製名單"); }catch(e){ toastEl("無法複製，請手動選取"); }
   });
 }
@@ -659,7 +687,7 @@ function replyPreviewHTML(r){
 }
 function statusGridHTML(pid){
   const p=S.projects.find(x=>x.id===pid);
-  return SECTIONS.map(sec=>{
+  return projSections(p).map(sec=>{
     const all=sec.list, done=all.filter(s=>isDone(pid,s.code)).length, list=all.filter(s=>passFilter(pid,s));
     if(!list.length) return "";
     return `<div class="group-h"><span>${sec.label}</span><span>${done}/${all.length}</span></div>
@@ -668,8 +696,8 @@ function statusGridHTML(pid){
 }
 
 function renderDash(){
-  const ps=sortedProjects(), open=ps.filter(p=>p.status==="open"), total=SITES.length;
-  const sum = open.length?`<div class="card"><div class="row"><div class="grow"><div class="meta">進行中專案</div><div class="big">${open.length}</div></div><div class="grow"><div class="meta">待回覆項目</div><div class="big">${open.reduce((a,p)=>a+(total-countReplies(p.id)),0)}</div></div></div></div>`:"";
+  const ps=sortedProjects().filter(p=>S.canEdit||forMe(p)), open=ps.filter(p=>p.status==="open");
+  const sum = open.length?`<div class="card"><div class="row"><div class="grow"><div class="meta">進行中專案</div><div class="big">${open.length}</div></div><div class="grow"><div class="meta">待回覆項目</div><div class="big">${open.reduce((a,p)=>a+(projTotal(p)-countReplies(p.id)),0)}</div></div></div></div>`:"";
   app.innerHTML = sum + (ps.length ? ps.map(p=>projectCardHTML(p)).join("") : `<div class="card empty">尚無專案。</div>`);
   app.querySelectorAll("[data-pid]").forEach(c=>c.addEventListener("click",()=>{ S.projectId=c.dataset.pid; render(); }));
 }
@@ -693,10 +721,10 @@ function replyEditorHTML(p,s,r,d){
 }
 function renderDashProject(){
   const p=S.projects.find(x=>x.id===S.projectId); if(!p){S.projectId=null;return renderDash();}
-  const done=countReplies(p.id), total=SITES.length;
+  const done=countReplies(p.id), total=projTotal(p);
   if(S.filter==="nofile" && !(isShare(p)&&p.shareScan)) S.filter="all";
   const listOnly = S.filter==="pending" || S.filter==="nofile";
-  const replies = (listOnly?[]:SITES.map(s=>({s,r:S.replies[replyKey(p.id,s.code)]})).filter(x=>x.r)).sort((a,b)=>(b.r.updatedAt||"").localeCompare(a.r.updatedAt||""));
+  const replies = (listOnly?[]:projSites(p).map(s=>({s,r:S.replies[replyKey(p.id,s.code)]})).filter(x=>x.r)).sort((a,b)=>(b.r.updatedAt||"").localeCompare(a.r.updatedAt||""));
   const fs=S.focusSite?siteByCode[S.focusSite]:null, fr=fs?S.replies[replyKey(p.id,fs.code)]:null;
   const editing=!!fs && S.editSite===fs.code && canEditReply(p,fs.code), ekey=fs?replyKey(p.id,fs.code):null;
   const d=editing?(S.draft[ekey]||(S.draft[ekey]={text:fr?.text||"",files:[...(fr?.files||[])]})):null;
@@ -705,8 +733,8 @@ function renderDashProject(){
     <button type="button" class="back" id="back">‹ 返回儀表板</button>
     <div class="card">
       <div class="row"><div class="grow title" style="font-size:18px">${esc(p.title)}</div>${p.status==="closed"?`<span class="pill closed">已結案</span>`:""}</div>
-      <div class="meta" style="margin-top:4px">${p.deadline?`期限 <span class="${isOverdue(p)?"overdue":""}">${esc(p.deadline)}</span> · `:""}已回覆 ${done}/${total}${isShare(p)&&p.shareScan?` · 已放檔 ${shareFileCount(p)}/${shareSites().length}`:""}</div>
-      <div class="bar" style="margin-top:8px"><i style="width:${Math.round(done/total*100)}%"></i></div>
+      <div class="meta" style="margin-top:4px">${p.deadline?`期限 <span class="${isOverdue(p)?"overdue":""}">${esc(p.deadline)}</span> · `:""}對象：${esc(groupsText(p))} · 已回覆 ${done}/${total}${isShare(p)&&p.shareScan?` · 已放檔 ${shareFileCount(p)}/${shareSites(p).length}`:""}</div>
+      <div class="bar" style="margin-top:8px"><i style="width:${total?Math.round(done/total*100):0}%"></i></div>
       ${S.canEdit?`<div class="row" style="margin-top:10px"><button type="button" class="btn sm" id="zipBtn" ${z?"disabled":""}>${z?`打包中 ${z.done}/${z.total}…`:"打包下載全部內容（ZIP）"}</button><span class="meta">公告、附件、各據點回覆與回覆總表</span></div>`:""}
     </div>
     <div class="card"><div class="section-h">各據點回覆狀況</div><div class="meta" style="margin-top:2px">${S.canEdit?"點據點可查看內容；按「編輯」可直接修改文字與附件":"點已回覆的據點可查看內容；點本據點可直接回覆或編輯"}</div>${filterBarHTML(p.id)}${statusGridHTML(p.id)||`<div class="meta" style="margin-top:8px">沒有符合的據點</div>`}</div>
@@ -749,13 +777,13 @@ async function downloadProjectZip(p){
   try{
     const JSZip=await loadJSZip(); const zip=new JSZip(); const root=zip.folder(safeName(p.title));
     const statusTxt = p.status==="closed"?"已結案":"進行中";
-    root.file("公告.txt",`專案名稱：${p.title}\n狀態：${statusTxt}\n回覆期限：${p.deadline||"無"}\n據點檔案存放位置：${isShare(p)?"公司共用資料夾（各據點資料夾\\"+shareFolderOf(p)+"）":"雲端（網站上傳）"}\n發布時間：${p.createdAt?new Date(p.createdAt).toLocaleString("zh-TW"):""}\n\n${p.body||""}\n`);
+    root.file("公告.txt",`專案名稱：${p.title}\n狀態：${statusTxt}\n回覆期限：${p.deadline||"無"}\n回覆對象：${groupsText(p)}\n據點檔案存放位置：${isShare(p)?"公司共用資料夾（各據點資料夾\\"+shareFolderOf(p)+"）":"雲端（網站上傳）"}\n發布時間：${p.createdAt?new Date(p.createdAt).toLocaleString("zh-TW"):""}\n\n${p.body||""}\n`);
     const addFiles=async(folder,list)=>{ let i=0; for(const f of list){ i++; try{ const {parts}=await fileBytes(f.id); folder.file(`${String(i).padStart(2,"0")}_${safeName(f.name)}`,new Blob(parts)); }catch(e){ folder.file(`${String(i).padStart(2,"0")}_${safeName(f.name)}.讀取失敗.txt`,"此附件已無法讀取"); } tick(); } };
     if(p.files&&p.files.length) await addFiles(root.folder("公告附件"),p.files);
     const sh=isShare(p), shCols = s => sh ? [shareRel(s.code)?shareStatusText(p,s.code):"", sharePath(p,s.code)] : [];
     const rows=[["據點代碼","據點","類別","狀態","回覆時間","回覆內容","附件數",...(sh?["共用資料夾狀況"+(p.shareScan?`（${new Date(p.shareScan.at).toLocaleString("zh-TW")} 掃描）`:""),"共用資料夾路徑"]:[])]];
     const rf=root.folder("各據點回覆");
-    for(const s of SITES){
+    for(const s of SITES.filter(s=>inProj(p,s)||S.replies[replyKey(p.id,s.code)])){   // 專案對象，加上對象外但已有回覆的據點
       const r=S.replies[replyKey(p.id,s.code)];
       if(!r){ rows.push([s.code,s.name,s.group,isDone(p.id,s.code)?"已回覆（僅放檔案）":"未回覆","","",0,...shCols(s)]); continue; }
       rows.push([s.code,s.name,s.group,"已回覆",r.updatedAt?new Date(r.updatedAt).toLocaleString("zh-TW"):"",r.text||"",(r.files||[]).length,...shCols(s)]);
@@ -780,6 +808,10 @@ function renderAdmin(){
     <div class="field"><label for="pTitle">專案名稱</label><input type="text" id="pTitle" placeholder="例：全省消防檢修資料確認" value="${esc(e?.title||"")}"></div>
     <div class="field"><label for="pBody">公告內容</label><textarea id="pBody" placeholder="說明要各據點確認或回覆的事項">${esc(e?.body||"")}</textarea></div>
     <div class="field"><label for="pDeadline">回覆期限（可留空）</label><input type="date" id="pDeadline" value="${esc(e?.deadline||"")}"></div>
+    <div class="field"><label>要回覆的單位（可複選）</label>
+      <div class="row">${GROUP_KEYS.map(g=>`<label class="opt" style="min-width:140px"><input type="checkbox" name="pGroup" value="${g.k}" ${projGroups(e).includes(g.k)?"checked":""}>${g.label}（${SITES.filter(s=>gkOf(s)===g.k).length} 個）</label>`).join("")}</div>
+      <div class="meta" id="pGroupNote"></div>
+    </div>
     <div class="field"><label>據點繳交檔案的存放位置</label>
       <div class="row">
         <label class="opt"><input type="radio" name="pStorage" value="cloud" ${e?.storage==="share"?"":"checked"}>雲端（在網站上傳，手機可用）</label>
@@ -799,7 +831,7 @@ function renderAdmin(){
     const arcBusy=!!(S.archiving&&S.archiving.pid===p.id), anyJob=!!(S.archiving||S.clearing);
     const canClear = p.status==="closed" && st.count>0;
     return `<div class="card"><div class="row"><div class="grow title">${esc(p.title)}</div>${p.status==="closed"?`<span class="pill closed">已結案</span>`:`<span class="pill ok">進行中</span>`}</div>
-    <div class="meta" style="margin-top:4px">${isShare(p)?"檔案放共用資料夾 · ":""}${p.deadline?"期限 "+esc(p.deadline)+" · ":""}回覆 ${countReplies(p.id)}/${SITES.length}${fileMeta}</div>
+    <div class="meta" style="margin-top:4px">對象：${esc(groupsText(p))} · ${isShare(p)?"檔案放共用資料夾 · ":""}${p.deadline?"期限 "+esc(p.deadline)+" · ":""}回覆 ${countReplies(p.id)}/${projTotal(p)}${fileMeta}</div>
     <div class="row" style="margin-top:10px"><button type="button" class="btn sm" data-edit="${p.id}">編輯</button><button type="button" class="btn sm" data-toggle="${p.id}" ${anyJob?"disabled":""}>${p.status==="closed"?"重新開放":"結案"}</button>${p.status==="closed"&&canArchive(p)?`<button type="button" class="btn sm" data-arc="${p.id}" ${anyJob?"disabled":""}>存到共用資料夾</button>`:""}${canClear?`<button type="button" class="btn sm" data-clear="${p.id}" ${anyJob?"disabled":""}>清除附件</button>`:""}<button type="button" class="btn sm danger" data-del="${p.id}" ${busy||arcBusy?"disabled":""}>刪除</button></div>
     ${arcBusy?`<div class="notice" style="margin-top:8px" id="arcProg">${arcProgText()}</div>`:arcPanelHTML(p)}
     ${S.scan&&S.scan.pid===p.id?`<div class="notice" style="margin-top:8px" id="scanProg">${S.scan.create?"建立資料夾並掃描":"掃描"}中 ${S.scan.done}/${S.scan.total}…</div>`:""}
@@ -809,10 +841,22 @@ function renderAdmin(){
   }).join("");
   app.innerHTML = form + `<div class="card" id="shareBox">${shareCfgInner()}</div>` + `<div class="card" id="rmBox">${rmInner()}</div>` + `<div class="card" id="acctBox">${acctInner()}</div>` + `<div class="card" id="storageBox">${storageInner()}</div>` + `<div class="section-h">所有專案</div>` + (list||`<div class="card empty">尚無專案</div>`);
   bindStorage(); bindAcct(); bindShareCfg(); bindRm(); bindArc();
-  const d = S.editingProject || (S.editingProject={files:[]}); d.files=d.files||[];
+  const d = S.editingProject || (S.editingProject={files:[]}); d.files=d.files||[]; d.groups=projGroups(d);
   const exEl=document.getElementById("pFolderEx"), fEl=document.getElementById("pFolder");
-  const showEx=()=>{ if(exEl) exEl.textContent=`${shareRoot()}\\${shareRel("SD0")||"（據點資料夾）"}\\${safeFolder(fEl.value)||safeFolder(d.title)||"（專案資料夾）"}`; };
+  const showEx=()=>{ if(!exEl) return; const ex=SITES.find(s=>inProj(d,s)&&shareRel(s.code))||siteByCode.SD0;
+    exEl.previousElementSibling.textContent=`各據點會看到自己的路徑，例如${ex.name}${ex.group==="服務站"?"站":""}：`;
+    exEl.textContent=`${shareRoot()}\\${shareRel(ex.code)||"（據點資料夾）"}\\${safeFolder(fEl.value)||safeFolder(d.title)||"（專案資料夾）"}`; };
   showEx();
+  /* 勾選要回覆的單位：顯示人數；編輯時若有已回覆的據點被排除，提醒一下 */
+  const gNote=()=>{ const el=document.getElementById("pGroupNote"); if(!el) return;
+    const n=projTotal(d), out=d.id?SITES.filter(s=>!inProj(d,s)&&S.replies[replyKey(d.id,s.code)]):[];
+    el.innerHTML = `共 ${n} 個據點需要回覆；其他據點看不到這個專案。`
+      + (out.length?`<br><span class="overdue">已回覆的 ${out.length} 個據點（${out.map(s=>esc(s.name)).join("、")}）不在勾選的單位內</span>，回覆會保留，但不再列入統計。`:""); };
+  gNote();
+  app.querySelectorAll('input[name="pGroup"]').forEach(c=>c.addEventListener("change",()=>{
+    d.groups=[...app.querySelectorAll('input[name="pGroup"]:checked')].map(x=>x.value);
+    if(!d.groups.length){ c.checked=true; d.groups=[c.value]; toastEl("至少要勾選一種單位"); }
+    gNote(); showEx(); }));
   fEl?.addEventListener("input",()=>{ d.shareFolder=fEl.value; d.folderTouched=true; showEx(); });
   document.getElementById("pTitle").addEventListener("input",ev=>{ if(fEl && !d.folderTouched){ fEl.value=safeFolder(ev.target.value); d.shareFolder=fEl.value; showEx(); } });
   app.querySelectorAll('input[name="pStorage"]').forEach(r=>r.addEventListener("change",()=>{ d.storage=r.value; if(r.value==="share" && !d.folderTouched) d.shareFolder=safeFolder(d.title); render(); }));
@@ -828,11 +872,12 @@ function renderAdmin(){
     const storage = d.storage==="share"?"share":"cloud";
     const shareFolder = storage==="share" ? (safeFolder(document.getElementById("pFolder")?.value)||safeFolder(title)) : (d.shareFolder||"");
     if(storage==="share" && !shareFolder){toastEl("請輸入專案資料夾名稱");return;}
+    const groups=projGroups(d);
     const btn=document.getElementById("pSave"); btn.disabled=true;
-    /* 共用資料夾專案：發布（或改成共用資料夾、改了資料夾名稱）時，順便替各據點建立專案資料夾。
+    /* 共用資料夾專案：發布（或改成共用資料夾、改了資料夾名稱、加了單位）時，順便替各據點建立專案資料夾。
        先在按下按鈕的當下取得資料夾權限，再存檔。手機或沒授權時照常發布，之後可到儀表板補建。 */
     const old = d.id ? S.projects.find(x=>x.id===d.id) : null;
-    const needMk = storage==="share" && (!old || !isShare(old) || shareFolderOf(old)!==shareFolder);
+    const needMk = storage==="share" && (!old || !isShare(old) || shareFolderOf(old)!==shareFolder || groups.some(k=>!projGroups(old).includes(k)));
     let mk = false, why = "";
     if(needMk){
       if(!FS_OK) why="這台裝置無法連到共用資料夾";
@@ -841,18 +886,18 @@ function renderAdmin(){
     const done = d.id?"已儲存":"已發布";
     let pid=d.id;
     try{
-      if(d.id) await S.db.collection("projects").doc(d.id).update({title,body,deadline,files:d.files,storage,shareFolder});
-      else pid=(await S.db.collection("projects").add({title,body,deadline,files:d.files,storage,shareFolder,status:"open",createdAt:new Date().toISOString()})).id;
+      if(d.id) await S.db.collection("projects").doc(d.id).update({title,body,deadline,files:d.files,storage,shareFolder,groups});
+      else pid=(await S.db.collection("projects").add({title,body,deadline,files:d.files,storage,shareFolder,groups,status:"open",createdAt:new Date().toISOString()})).id;
       S.editingProject=null; render();
     }catch(e){ toastEl("儲存失敗，請再試一次"); btn.disabled=false; return; }
     if(!needMk){ toastEl(done); return; }
     if(!mk){ toastEl(`${done}，但${why}，各據點的資料夾尚未建立。請用公司電腦到「儀表板」點進專案補建。`); return; }
     toastEl(`${done}，正在建立各據點的專案資料夾…`);
-    for(let k=0;k<30;k++){ const q=S.projects.find(x=>x.id===pid); if(q && isShare(q) && shareFolderOf(q)===shareFolder && !S.scan) break; await new Promise(r=>setTimeout(r,100)); }
+    for(let k=0;k<30;k++){ const q=S.projects.find(x=>x.id===pid); if(q && isShare(q) && shareFolderOf(q)===shareFolder && projGroups(q).join()===groups.join() && !S.scan) break; await new Promise(r=>setTimeout(r,100)); }
     await scanShare(pid,{create:true});
   });
   document.getElementById("pCancel")?.addEventListener("click",()=>{S.editingProject=null;render();});
-  app.querySelectorAll("[data-edit]").forEach(b=>b.addEventListener("click",()=>{ const p=S.projects.find(x=>x.id===b.dataset.edit); S.editingProject={id:p.id,title:p.title,body:p.body,deadline:p.deadline||"",files:[...(p.files||[])],storage:p.storage||"cloud",shareFolder:p.shareFolder||"",folderTouched:!!p.shareFolder}; render(); window.scrollTo({top:0}); }));
+  app.querySelectorAll("[data-edit]").forEach(b=>b.addEventListener("click",()=>{ const p=S.projects.find(x=>x.id===b.dataset.edit); S.editingProject={id:p.id,title:p.title,body:p.body,deadline:p.deadline||"",files:[...(p.files||[])],storage:p.storage||"cloud",shareFolder:p.shareFolder||"",folderTouched:!!p.shareFolder,groups:projGroups(p)}; render(); window.scrollTo({top:0}); }));
   app.querySelectorAll("[data-arc]").forEach(b=>b.addEventListener("click",()=>{ const p=S.projects.find(x=>x.id===b.dataset.arc); if(p) arcOpen(p); }));
   app.querySelectorAll("[data-toggle]").forEach(b=>b.addEventListener("click",async()=>{ const p=S.projects.find(x=>x.id===b.dataset.toggle);
     if(p.status!=="closed" && canArchive(p)){ arcOpen(p); return; }   // 結案＝先把資料存到共用資料夾
@@ -968,7 +1013,7 @@ async function archiveProject(pid){
   const drop=async list=>{ for(const f of list){ moved++; freed+=f.size||0; try{ await deleteStored(f); }catch(e){} } };   // 刪不掉的會變成無主檔案，「儲存空間」可清理
   const sh=isShare(p);
   const rows=[["據點代碼","據點","類別","狀態","回覆時間","回覆內容","附件數","存放位置"]];
-  for(const s of SITES){
+  for(const s of SITES.filter(s=>inProj(p,s)||S.replies[replyKey(pid,s.code)])){   // 專案對象，加上對象外但已有回覆的據點
     const key=replyKey(pid,s.code), r=S.replies[key];
     if(!r){ const fd=isDone(pid,s.code); rows.push([s.code,s.name,s.group,fd?"已回覆（僅放檔案）":"未回覆","","",0,fd?sharePath(p,s.code):""]); continue; }
     const files=r.files||[], prev=r.archivedNames||[];
@@ -996,7 +1041,7 @@ async function archiveProject(pid){
   if(pKeep.length){ try{ const r=await copyFiles(await central.getDirectoryHandle("公告附件",{create:true}),pKeep); pOk=r.ok; pKeep=r.keep; }catch(e){ pKeep.forEach(tick); } }
   left+=pKeep.length;
   try{
-    await fsPut(central,"公告.txt",txtBlob(`專案名稱：${p.title}\n回覆期限：${p.deadline||"無"}\n發布時間：${when(p.createdAt)}\n結案時間：${when(now)}\n回覆：${countReplies(pid)}/${SITES.length}\n\n${p.body||""}\n`));
+    await fsPut(central,"公告.txt",txtBlob(`專案名稱：${p.title}\n回覆期限：${p.deadline||"無"}\n發布時間：${when(p.createdAt)}\n結案時間：${when(now)}\n回覆對象：${groupsText(p)}\n回覆：${countReplies(pid)}/${projTotal(p)}\n\n${p.body||""}\n`));
     await fsPut(central,"回覆總表.csv",new Blob(["﻿"+rows.map(r=>r.map(v=>`"${String(v??"").replace(/"/g,'""')}"`).join(",")).join("\r\n")],{type:"text/csv"}));
   }catch(e){ sumOk=false; }
   tick();
@@ -1080,7 +1125,7 @@ async function scanShare(pid,{create=false,pick=false,auto=false}={}){
   let root;
   try{ root=await shareRootHandle(create?"readwrite":"read",{pick,noPrompt:auto}); }
   catch(e){ if(auto){ setAutoScan(pid,false); toastEl("自動掃描已停止，請再按一次「掃描共用資料夾」"); render(); } else if(e?.name!=="AbortError") toastEl("無法開啟共用資料夾，請再按一次"); return; }
-  const sites=shareSites(), out={}; let i=0;
+  const sites=shareSites(p), out={}; let i=0;
   S.scan={pid,done:0,total:sites.length,create}; render();
   const worker=async()=>{ while(i<sites.length){ const s=sites[i++]; out[s.code]=await scanSite(root,p,s.code,create); S.scan.done++; const el=document.getElementById("scanProg"); if(el) el.textContent=`${create?"建立資料夾並掃描":"掃描"}中 ${S.scan.done}/${S.scan.total}…`; } };
   await Promise.all(Array.from({length:5},worker));
@@ -1097,10 +1142,10 @@ function setAutoScan(pid,on){
   if(on) S.autoScan={pid,timer:setInterval(()=>{ if(!(S.view==="dash" && S.projectId===pid && S.canEdit)){ setAutoScan(pid,false); return; } scanShare(pid,{auto:true}); },5*60000)};
 }
 function shareScanCardHTML(p){
-  const sc=p.shareScan, sites=shareSites(), busy=S.scan&&S.scan.pid===p.id;
+  const sc=p.shareScan, sites=shareSites(p), busy=S.scan&&S.scan.pid===p.id;
   const lost = sc ? sites.filter(s=>scanOf(p,s.code)?.e==="site") : [];
   const nofolder = sc ? sites.filter(s=>scanOf(p,s.code)?.e==="folder") : [];
-  const unset = SITES.length-sites.length;
+  const unset = projTotal(p)-sites.length;
   const rootName = shareRoot().split("\\").pop();
   const summary = sc ? `上次掃描 ${fmtDate(sc.at)} · 已放檔 ${shareFileCount(p)}/${sites.length}` : "尚未掃描";
   if(!S.canEdit) return `<div class="card"><div class="section-h">共用資料夾繳交狀況</div><div class="meta" style="margin-top:4px">${summary}${sc?"。各據點格子下方會顯示檔案數。":"，管理者掃描後會顯示各據點的檔案數。"}</div></div>`;
@@ -1225,64 +1270,127 @@ async function rmRun(all){
   toastEl(fail.length?`已刪除 ${ok.length} 個，${fail.length} 個失敗`:`已刪除 ${ok.length} 個資料夾`);
 }
 
-/* ---------- 據點帳號（建立尚未建立的帳號，密碼只顯示一次） ---------- */
-function genPass(){
-  const cs="abcdefghjkmnpqrstuvwxyz23456789", a=new Uint32Array(8);
-  crypto.getRandomValues(a); return Array.from(a,x=>cs[x%cs.length]).join("");
+/* ---------- 據點帳號 ----------
+   所有據點第一次登入的密碼都是 INIT_PW（1234），登入後必須先改成自己的密碼才能使用。
+   這裡的三個功能都用「第二個 Firebase 連線」操作據點帳號，管理者本身不會被登出：
+   ・建立尚未建立的據點帳號：密碼設為 1234，已有帳號的不動
+   ・把舊的隨機密碼改成 1234：讀 11/10 建帳號時下載的 CSV，用舊密碼登入後改成 1234；已自行改過密碼的據點不動
+   ・檢查哪些據點還沒改密碼：逐一用 1234 試登入，登得進去＝還沒改 */
+const ACCT_MODES = {create:"建立帳號", reset:"改成初始密碼", check:"檢查"};
+const badPw = e => /invalid-credential|wrong-password|user-not-found|invalid-login|invalid-email/.test(e?.code||"");
+async function acctAuth(){
+  const app2 = firebase.apps.find(a=>a.name==="acct-maker") || firebase.initializeApp(FIREBASE_CONFIG,"acct-maker");
+  const a2 = app2.auth();
+  try{ await a2.setPersistence(firebase.auth.Auth.Persistence.NONE); }catch(e){}
+  return a2;
+}
+async function acctRun(mode,fn){
+  if(S.acct?.running) return;
+  S.acct={mode,running:true,done:0,list:[],err:null}; renderAcct();
+  let a2;
+  try{ a2=await acctAuth(); }catch(e){ S.acct={...S.acct,running:false,err:"無法連線到 Firebase，請重新整理後再試"}; renderAcct(); return; }
+  for(const s of SITES){
+    let r;
+    try{ r=await fn(a2,s); }
+    catch(e){
+      const c=e?.code||""; r={st:"fail",err:c||"錯誤"};
+      if(/operation-not-allowed|admin-restricted/.test(c)) S.acct.err="Firebase 目前不允許這個動作：請到 Authentication → Sign-in method 啟用「電子郵件/密碼」，並確認「設定 → 使用者動作」允許建立帳號，再按一次。";
+      else if(/too-many-requests/.test(c)) S.acct.err="嘗試太頻繁，被 Firebase 暫時阻擋。請過 1 小時再按一次（已處理好的據點不會重複處理）。";
+      else if(/network/.test(c)) S.acct.err="網路連線中斷，請確認網路後再按一次。";
+    }
+    try{ await a2.signOut(); }catch(e){}
+    S.acct.list.push({s,...r}); S.acct.done++;
+    const n=document.getElementById("acctProg"); if(n) n.textContent=`${ACCT_MODES[mode]}中 ${S.acct.done}/${SITES.length}…請勿關閉此頁`;
+    if(S.acct.err) break;
+  }
+  S.acct.running=false; renderAcct();
+}
+const createAcct = (a2,s) => a2.createUserWithEmailAndPassword(emailOf(s.code),realPw(INIT_PW));
+function createSiteAccounts(){
+  acctRun("create",async(a2,s)=>{
+    try{ await createAcct(a2,s); return {st:"new"}; }
+    catch(e){ if(e?.code==="auth/email-already-in-use") return {st:"exists"}; throw e; }
+  });
+}
+function checkInitPw(){
+  acctRun("check",async(a2,s)=>{
+    try{ await a2.signInWithEmailAndPassword(emailOf(s.code),realPw(INIT_PW)); return {st:"init"}; }
+    catch(e){ if(e?.code==="auth/user-not-found") return {st:"none"}; if(badPw(e)) return {st:"changed"}; throw e; }
+  });
+}
+/* 讀 11/10 下載的「據點帳號密碼_日期.csv」（或「複製清單」貼成的文字檔）：每列有據點代碼與密碼 */
+function parseAcctList(text){
+  const map={};
+  for(const line of String(text).replace(/^﻿/,"").split(/\r?\n/)){
+    const cells=line.split(/[,\t]/).map(c=>c.trim().replace(/^"|"$/g,"").trim()).filter(Boolean);
+    const code=cells.map(c=>c.toUpperCase()).find(c=>siteByCode[c]);
+    const pw=cells[cells.length-1];
+    if(code && pw && pw.toUpperCase()!==code) map[code]=pw;
+  }
+  return map;
+}
+async function resetToInit(file){
+  let map={};
+  try{ map=parseAcctList(await file.text()); }catch(e){}
+  const n=Object.keys(map).length;
+  if(!n){ toastEl("檔案裡找不到據點密碼，請選 11/10 建立帳號時下載的「據點帳號密碼」CSV"); return; }
+  acctRun("reset",async(a2,s)=>{
+    const old=map[s.code];
+    if(old){
+      try{
+        const {user}=await a2.signInWithEmailAndPassword(emailOf(s.code),realPw(old));
+        await user.updatePassword(realPw(INIT_PW));
+        try{ await user.updateProfile({displayName:null}); }catch(e){}   // 清掉「已改過密碼」標記，下次登入會被要求改密碼
+        return {st:"reset"};
+      }catch(e){ if(!badPw(e)) throw e; }
+    }
+    try{ await createAcct(a2,s); return {st:"new"}; }
+    catch(e){ if(e?.code!=="auth/email-already-in-use") throw e; }
+    try{ await a2.signInWithEmailAndPassword(emailOf(s.code),realPw(INIT_PW)); return {st:"init"}; }
+    catch(e){ if(badPw(e)) return {st:"kept"}; throw e; }
+  });
 }
 function acctInner(){
   const A=S.acct;
   const head=`<div class="section-h">據點帳號</div>
-    <div class="meta" style="margin-top:4px">每個據點一個帳號（共 ${SITES.length} 個），登入後只能新增、修改自己據點的回覆。按下方按鈕會替「還沒有帳號」的據點建立帳號並產生密碼，已有帳號的據點不會被更動。各據點第一次登入時，系統會請他們把初始密碼換成自己的密碼（之後也可點右上角據點名稱 →「修改密碼」）。</div>`;
-  if(!A) return head+`<div class="row" style="margin-top:10px"><button type="button" class="btn sm" id="acctGo">建立尚未建立的據點帳號</button></div>
-    <div class="meta" style="margin-top:6px">要重設某據點密碼：到 Firebase 主控台 → Authentication → 使用者，刪除該據點帳號，再回來按這個按鈕，就會只替它產生新密碼。</div>`;
-  if(A.running) return head+`<div class="notice" style="margin-top:10px">建立中 ${A.done}/${SITES.length}…請勿關閉此頁</div>`;
-  const made=A.list.filter(x=>x.st==="new"), had=A.list.filter(x=>x.st==="exists"), bad=A.list.filter(x=>x.st==="fail");
-  return head+`
-    <div class="meta" style="margin-top:8px">本次新建 ${made.length} 個 · 原本已存在 ${had.length} 個${bad.length?` · <span class="overdue">失敗 ${bad.length} 個</span>`:""}</div>
+    <div class="meta" style="margin-top:4px">每個據點一個帳號（共 ${SITES.length} 個），登入後只能新增、修改自己據點的回覆。所有據點<b>第一次登入的密碼都是 ${esc(INIT_PW)}</b>，登入後系統會要求先改成自己的密碼（至少 ${PW_MIN} 個字）才能使用；之後也可點右上角據點名稱 →「修改密碼」。</div>`;
+  if(A&&A.running) return head+`<div class="notice" style="margin-top:10px" id="acctProg">${ACCT_MODES[A.mode]}中 ${A.done}/${SITES.length}…請勿關閉此頁</div>`;
+  if(!A) return head+`
+    <div class="row" style="margin-top:10px"><button type="button" class="btn sm" id="acctGo">建立尚未建立的據點帳號</button><button type="button" class="btn sm" id="acctCheck">檢查哪些據點還沒改密碼</button></div>
+    <div style="margin-top:12px;border-top:1px solid var(--line);padding-top:10px">
+      <div class="row"><input type="file" id="acctFile" accept=".csv,.txt,text/csv,text/plain" hidden><button type="button" class="btn sm" id="acctReset">把舊的隨機密碼改成 ${esc(INIT_PW)}</button></div>
+      <div class="meta" style="margin-top:6px">按下後請選 11/10 建立帳號時下載的「據點帳號密碼_….csv」。系統會把還在用當初隨機密碼的據點改成 ${esc(INIT_PW)}；已經自己改過密碼的據點不會變更。</div>
+    </div>
+    <div class="meta" style="margin-top:10px">某據點忘記密碼：到 Firebase 主控台 → Authentication → 使用者，刪除該據點帳號，再按「建立尚未建立的據點帳號」，該據點的密碼就會回到 ${esc(INIT_PW)}（之前的回覆不會消失）。</div>`;
+  const by=st=>A.list.filter(x=>x.st===st), nm=l=>l.map(x=>esc(x.s.name)).join("、");
+  const line=(l,t)=>l.length?`<div style="margin-top:6px">${t} <b>${l.length}</b> 個：<span class="meta">${nm(l)}</span></div>`:"";
+  const bad=by("fail");
+  let body="";
+  if(A.mode==="create") body=line(by("new"),`已建立（密碼 ${esc(INIT_PW)}）`)+`<div class="meta" style="margin-top:6px">原本已有帳號 ${by("exists").length} 個，沒有變更。</div>`;
+  if(A.mode==="reset") body=line(by("reset"),`已改成 ${esc(INIT_PW)}`)+line(by("new"),`原本沒有帳號，已建立（密碼 ${esc(INIT_PW)}）`)+line(by("init"),`原本就是 ${esc(INIT_PW)}`)+line(by("kept"),"已自行改過密碼，沒有變更");
+  if(A.mode==="check"){ const l=by("init");
+    body=(l.length?`<div class="notice" style="margin-top:8px">還在用初始密碼 ${esc(INIT_PW)} 的據點 <b>${l.length}</b> 個：${nm(l)}<div class="row" style="margin-top:8px"><button type="button" class="btn sm" id="acctCopy">複製名單</button></div></div>`:`<div style="margin-top:8px">所有已建立帳號的據點都改好密碼了。</div>`)
+      +`<div class="meta" style="margin-top:6px">其餘 ${by("changed").length} 個用 ${esc(INIT_PW)} 登不進去，表示已改成自己的密碼。</div>`+line(by("none"),"尚未建立帳號"); }
+  return head+`<div style="margin-top:8px"><b>${ACCT_MODES[A.mode]}結果</b></div>${body}
+    ${bad.length?`<div style="margin-top:6px"><span class="overdue">失敗 ${bad.length} 個：</span>${bad.map(x=>esc(x.s.name)+"（"+esc(x.err)+"）").join("、")}</div>`:""}
     ${A.err?`<div class="overdue" style="margin-top:6px">${esc(A.err)}</div>`:""}
-    ${made.length?`<div class="notice" style="margin-top:8px"><b>密碼只會顯示這一次</b>，重新整理或離開此頁就看不到了，請先下載清單再分別通知各據點。
-      <div class="row" style="margin-top:8px"><button type="button" class="btn sm" id="acctCsv">下載帳號密碼清單（CSV）</button><button type="button" class="btn sm" id="acctCopy">複製清單</button></div></div>
-      <div style="margin-top:8px;font-size:13px">${made.map(x=>`<div class="row" style="gap:6px;padding:3px 0;border-top:1px solid var(--line)"><span class="grow">${esc(siteLabel(x.s))}</span><code>${esc(x.pw)}</code></div>`).join("")}</div>`:""}
-    ${bad.length?`<div class="meta" style="margin-top:8px">失敗：${bad.map(x=>esc(x.s.name)+"（"+esc(x.err)+"）").join("、")}</div>`:""}
-    <div class="row" style="margin-top:10px"><button type="button" class="btn sm" id="acctDone">${made.length?"我已下載，關閉清單":"關閉"}</button></div>`;
+    ${A.err&&A.done<SITES.length?`<div class="meta" style="margin-top:6px">已處理 ${A.done}/${SITES.length} 個據點，其餘尚未處理。</div>`:""}
+    <div class="row" style="margin-top:10px"><button type="button" class="btn sm" id="acctDone">關閉</button></div>`;
 }
 window.addEventListener("beforeunload",e=>{ if(S.archiving){ e.preventDefault(); e.returnValue=""; } });
-window.addEventListener("beforeunload",e=>{ if(S.acct && (S.acct.running || S.acct.list.some(x=>x.st==="new"))){ e.preventDefault(); e.returnValue=""; } });
+window.addEventListener("beforeunload",e=>{ if(S.acct?.running){ e.preventDefault(); e.returnValue=""; } });
 function renderAcct(){ const box=document.getElementById("acctBox"); if(box){ box.innerHTML=acctInner(); bindAcct(); } }
-function acctListText(sep){
-  return (S.acct?.list||[]).filter(x=>x.st==="new").map(x=>[x.s.code,x.s.name,x.pw].join(sep)).join("\r\n");
-}
 function bindAcct(){
   document.getElementById("acctGo")?.addEventListener("click",createSiteAccounts);
+  document.getElementById("acctCheck")?.addEventListener("click",checkInitPw);
+  const fi=document.getElementById("acctFile");
+  document.getElementById("acctReset")?.addEventListener("click",()=>fi?.click());
+  fi?.addEventListener("change",()=>{ const f=fi.files&&fi.files[0]; fi.value=""; if(f) resetToInit(f); });
   document.getElementById("acctDone")?.addEventListener("click",()=>{ S.acct=null; renderAcct(); });
-  document.getElementById("acctCopy")?.addEventListener("click",async()=>{ try{ await navigator.clipboard.writeText("據點代碼\t據點\t密碼\r\n"+acctListText("\t")); toastEl("已複製"); }catch(e){ toastEl("無法複製，請改用下載"); } });
-  document.getElementById("acctCsv")?.addEventListener("click",()=>{
-    const csv="﻿據點代碼,據點,密碼\r\n"+acctListText(",");
-    const a=document.createElement("a"); a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"})); a.download=`據點帳號密碼_${today()}.csv`;
-    document.body.appendChild(a); a.click(); setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},4000);
+  document.getElementById("acctCopy")?.addEventListener("click",async()=>{
+    const txt=SECTIONS.map(sec=>{ const l=sec.list.filter(s=>S.acct.list.some(x=>x.s===s&&x.st==="init")); return l.length?`【${sec.label}】${l.map(s=>s.name).join("、")}`:""; }).filter(Boolean).join("\n");
+    try{ await navigator.clipboard.writeText(txt); toastEl("已複製名單"); }catch(e){ toastEl("無法複製，請手動選取"); }
   });
-}
-async function createSiteAccounts(){
-  if(S.acct?.running) return;
-  S.acct={running:true,done:0,list:[],err:null}; renderAcct();
-  // 用第二個 Firebase 連線建立帳號，管理者本身不會被登出
-  const app2 = firebase.apps.find(a=>a.name==="acct-maker") || firebase.initializeApp(FIREBASE_CONFIG,"acct-maker");
-  const a2 = app2.auth();
-  try{ await a2.setPersistence(firebase.auth.Auth.Persistence.NONE); }catch(e){}
-  for(const s of SITES){
-    const pw=genPass();
-    try{ await a2.createUserWithEmailAndPassword(emailOf(s.code),pw); S.acct.list.push({s,pw,st:"new"}); try{ await a2.signOut(); }catch(e){} }
-    catch(e){
-      if(e?.code==="auth/email-already-in-use") S.acct.list.push({s,st:"exists"});
-      else { S.acct.list.push({s,st:"fail",err:e?.code||"錯誤"});
-        if(/operation-not-allowed|admin-restricted/.test(e?.code||"")){ S.acct.err="Firebase 目前不允許建立帳號：請到 Authentication → Sign-in method 啟用「電子郵件/密碼」，並確認「設定 → 使用者動作」允許建立帳號，再按一次。"; break; }
-        if(/too-many-requests/.test(e?.code||"")){ S.acct.err="建立太頻繁被暫時阻擋，請過 1 小時再按一次（已建立的不會重複）。"; break; }
-      }
-    }
-    S.acct.done++; const box=document.getElementById("acctBox"); if(box&&S.acct.running){ const n=box.querySelector(".notice"); if(n) n.textContent=`建立中 ${S.acct.done}/${SITES.length}…請勿關閉此頁`; }
-  }
-  S.acct.running=false; renderAcct();
 }
 
 /* ---------- 儲存空間（Firestore 免費額度 1 GB） ---------- */
