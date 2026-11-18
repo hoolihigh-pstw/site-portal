@@ -471,24 +471,56 @@ function renderHome(){
   app.querySelectorAll("[data-pid]").forEach(c=>c.addEventListener("click",()=>{ S.projectId=c.dataset.pid; render(); }));
 }
 
+/* 可上傳的檔案：照片、PDF、Word、Excel、PowerPoint */
+const OFFICE_TYPES = {
+  doc:["Word","application/msword"], docx:["Word","application/vnd.openxmlformats-officedocument.wordprocessingml.document"],
+  xls:["Excel","application/vnd.ms-excel"], xlsx:["Excel","application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"],
+  ppt:["PPT","application/vnd.ms-powerpoint"], pptx:["PPT","application/vnd.openxmlformats-officedocument.presentationml.presentation"]
+};
+const FILE_ACCEPT = "image/*,application/pdf,.pdf,"+Object.keys(OFFICE_TYPES).map(e=>"."+e).join(",")+","+Object.values(OFFICE_TYPES).map(v=>v[1]).join(",");
+const FILE_KINDS_TEXT = "照片、PDF、Word、Excel、PPT";
+const IMG_EXT = {jpg:"image/jpeg",jpeg:"image/jpeg",png:"image/png",gif:"image/gif",webp:"image/webp",bmp:"image/bmp",heic:"image/heic",heif:"image/heif"};
+const extOf = n => { const m=String(n||"").toLowerCase().match(/\.([a-z0-9]+)$/); return m?m[1]:""; };
+/* 回傳 {label, view, mime}：view=true 表示瀏覽器可以直接開（照片、PDF），其餘（Office 檔）改成下載；認不得的檔案回傳 null */
+function fileKind(name,type){
+  const ext=extOf(name), t=String(type||"");
+  if(OFFICE_TYPES[ext]) return {label:OFFICE_TYPES[ext][0], view:false, mime:OFFICE_TYPES[ext][1]};
+  if(t.includes("pdf")||ext==="pdf") return {label:"PDF", view:true, mime:"application/pdf"};
+  if(t.startsWith("image/")) return {label:"圖片", view:true, mime:t};
+  if(IMG_EXT[ext]) return {label:"圖片", view:true, mime:IMG_EXT[ext]};
+  const off=Object.values(OFFICE_TYPES).find(v=>v[1]===t); if(off) return {label:off[0], view:false, mime:off[1]};
+  return null;
+}
 function filesHTML(files, removable){
   if(!files||!files.length) return `<div class="meta">沒有附件</div>`;
   return `<div class="files">${files.map((f,i)=>{
-    const isPdf=(f.type||"").includes("pdf")||/\.pdf$/i.test(f.name||"");
-    const pic = f.thumb ? `<img src="${esc(f.thumb)}" alt="${esc(f.name)}">` : (isPdf?`<div class="pdf">PDF</div>`:`<div class="pdf" style="color:var(--muted)">圖片</div>`);
-    return `<div class="file"><a href="#" data-open="${esc(f.id)}" data-name="${esc(f.name)}" data-type="${esc(f.type||"")}">${pic}<div class="fi"><div class="fn">${esc(f.name)}</div><div class="fs">${isPdf?"PDF":"圖片"}${f.size?" · "+fmtSize(f.size):""}</div></div></a>${removable?`<button type="button" class="rm" data-rm="${i}" aria-label="移除 ${esc(f.name)}">×</button>`:""}</div>`;
+    const kd=fileKind(f.name,f.type)||{label:"圖片",view:true}, isPdf=kd.label==="PDF";
+    const pic = f.thumb ? `<img src="${esc(f.thumb)}" alt="${esc(f.name)}">` : (isPdf?`<div class="pdf">PDF</div>`:`<div class="pdf" style="color:var(--muted)">${kd.label}</div>`);
+    return `<div class="file"><a href="#" data-open="${esc(f.id)}" data-name="${esc(f.name)}" data-type="${esc(f.type||"")}">${pic}<div class="fi"><div class="fn">${esc(f.name)}</div><div class="fs">${kd.label}${kd.view?"":" · 點一下下載"}${f.size?" · "+fmtSize(f.size):""}</div></div></a>${removable?`<button type="button" class="rm" data-rm="${i}" aria-label="移除 ${esc(f.name)}">×</button>`:""}</div>`;
   }).join("")}</div>`;
 }
 /* 點附件：先同步開新分頁（避免被瀏覽器擋下），再從資料庫把區塊組回檔案 */
 app.addEventListener("click",async ev=>{
   const a=ev.target.closest("[data-open]"); if(!a) return; ev.preventDefault();
   const id=a.dataset.open, name=a.dataset.name, type=a.dataset.type||"application/octet-stream";
+  const kd=fileKind(name,type);
+  if(kd && !kd.view){
+    if(a.dataset.busy) return; a.dataset.busy="1"; toastEl("下載中，請稍候…");
+    try{
+      const {parts}=await fileBytes(id);
+      const url=URL.createObjectURL(new Blob(parts,{type:kd.mime}));
+      const dl=document.createElement("a"); dl.href=url; dl.download=name||"附件"; document.body.appendChild(dl); dl.click();
+      setTimeout(()=>{ URL.revokeObjectURL(url); dl.remove(); },4000);
+      toastEl("已下載："+name);
+    }catch(e){ toastEl(e?.code==="permission-denied"?"沒有讀取權限，請通知管理者更新 Firestore 規則":"檔案讀取失敗，可能已被刪除"); }
+    delete a.dataset.busy; return;
+  }
   const w=window.open("","_blank");
   if(w){ try{ w.document.write(`<title>${esc(name)}</title><p style="font-family:sans-serif;padding:24px">載入中…</p>`); }catch(e){} }
   try{
     const url = await fileURL(id,type);
     if(w) w.location.href=url; else location.href=url;
-  }catch(e){ if(w) w.close(); toastEl("檔案讀取失敗，可能已被刪除"); }
+  }catch(e){ if(w) w.close(); toastEl(e?.code==="permission-denied"?"沒有讀取權限，請通知管理者更新 Firestore 規則":"檔案讀取失敗，可能已被刪除"); }
 });
 async function fileBytes(id){
   const doc=S.db.collection("files").doc(id);
@@ -539,10 +571,10 @@ function renderProject(){
       ${canReply?`
       <div class="form" style="margin-top:10px">
         <div class="field"><label for="replyText">回覆內容</label><textarea id="replyText" placeholder="請填寫本據點的確認結果或說明">${esc(d.text)}</textarea></div>
-        ${isShare(p)?shareFieldHTML(p,S.site,d,"fileList"):`<div class="field"><label>附件（照片或 PDF）</label>
+        ${isShare(p)?shareFieldHTML(p,S.site,d,"fileList"):`<div class="field"><label>附件（${FILE_KINDS_TEXT}）</label>
           <div id="fileList">${filesHTML(d.files,true)}</div>
           <div class="row">
-            <input type="file" id="fileInput" accept="image/*,application/pdf" multiple hidden>
+            <input type="file" id="fileInput" accept="${FILE_ACCEPT}" multiple hidden>
             <button type="button" class="btn sm" id="addFile">＋ 加入檔案</button>
             <span class="meta grow" id="upMsg" style="overflow-wrap:anywhere"></span>
           </div>
@@ -588,7 +620,9 @@ async function makeThumb(file){
 }
 async function uploadFile(f0,onProgress){
   const f = await shrinkImage(f0);
-  const type = f.type || (f0.name.toLowerCase().endsWith(".pdf")?"application/pdf":"application/octet-stream");
+  const kd = fileKind(f.name,f.type) || fileKind(f0.name,f0.type);
+  if(!kd) throw Object.assign(new Error("bad_type"),{code:"bad_type"});
+  const type = kd.view ? (f.type || kd.mime) : kd.mime;
   if(f.size>MAX_FILE) throw Object.assign(new Error("too_large"),{code:"too_large"});
   const buf=new Uint8Array(await f.arrayBuffer()), n=Math.ceil(buf.length/CHUNK)||1;
   const id = `${Date.now().toString(36)}${Math.random().toString(36).slice(2,8)}`;
@@ -617,7 +651,7 @@ async function handleFiles(list,d,key,listId,msgId,btnId){
   for(const f0 of list){
     n++; if(msg) msg.textContent=`上傳中 ${n}/${list.length}：${f0.name}`;
     try{ d.files.push(await uploadFile(f0, p=>{ if(msg) msg.textContent=`上傳中 ${n}/${list.length}（${Math.round(p*100)}%）：${f0.name}`; })); }
-    catch(e){ toastEl(e?.code==="too_large"?`${f0.name} 超過 20MB`:e?.code==="permission-denied"?"沒有上傳權限，請檢查 Firestore 規則":`${f0.name} 上傳失敗`); }
+    catch(e){ toastEl(e?.code==="too_large"?`${f0.name} 超過 20MB`:e?.code==="bad_type"?`${f0.name} 無法上傳：只接受${FILE_KINDS_TEXT}`:e?.code==="permission-denied"?"沒有上傳權限，請檢查 Firestore 規則":`${f0.name} 上傳失敗`); }
   }
   S.uploading=false; if(btn) btn.disabled=false; if(msg) msg.textContent="";
   const fl=document.getElementById(listId); if(fl){fl.innerHTML=filesHTML(d.files,true); bindRemove(d,listId);}
@@ -701,7 +735,7 @@ function renderDash(){
   app.innerHTML = sum + (ps.length ? ps.map(p=>projectCardHTML(p)).join("") : `<div class="card empty">尚無專案。</div>`);
   app.querySelectorAll("[data-pid]").forEach(c=>c.addEventListener("click",()=>{ S.projectId=c.dataset.pid; render(); }));
 }
-function canSeeFiles(code){ return S.canEdit || code===S.site; }
+function canSeeFiles(code){ return true; }   // 各據點可互相檢視附件（Firestore 規則同步開放）
 function replyDetailHTML(p,s,r){
   return `<div class="row"><b>${esc(s.name)}</b><span class="meta grow">${showCode(s)?s.code+" · ":""}${fmtDate(r.updatedAt)}</span>${canEditReply(p,s.code)&&!(S.editSite===s.code)?`<button type="button" class="btn sm" data-edit-reply="${s.code}">編輯</button>`:""}</div>
     <div class="body-text">${esc(r.text)||"<span class='meta'>（僅附件）</span>"}</div>
@@ -711,8 +745,8 @@ function replyEditorHTML(p,s,r,d){
   const n=(r?.files||[]).length;
   return `<div class="form">
     <div class="field"><label for="dText">回覆內容</label><textarea id="dText" placeholder="請填寫${esc(s.name)}的確認結果或說明">${esc(d.text)}</textarea></div>
-    ${isShare(p)?shareFieldHTML(p,s.code,d,"dFileList"):`<div class="field"><label>附件（照片或 PDF）</label><div id="dFileList">${filesHTML(d.files,true)}</div>
-      <div class="row"><input type="file" id="dFileInput" accept="image/*,application/pdf" multiple hidden><button type="button" class="btn sm" id="dAddFile">＋ 加入檔案</button><span class="meta" id="dUpMsg"></span></div></div>`}
+    ${isShare(p)?shareFieldHTML(p,s.code,d,"dFileList"):`<div class="field"><label>附件（${FILE_KINDS_TEXT}）</label><div id="dFileList">${filesHTML(d.files,true)}</div>
+      <div class="row"><input type="file" id="dFileInput" accept="${FILE_ACCEPT}" multiple hidden><button type="button" class="btn sm" id="dAddFile">＋ 加入檔案</button><span class="meta" id="dUpMsg"></span></div></div>`}
     <div class="row"><button type="button" class="btn primary grow" id="dSave">${r?"儲存修改":"送出回覆"}</button><button type="button" class="btn" id="dCancel">取消</button></div>
     ${S.canEdit&&r?`<div class="row"><button type="button" class="btn sm danger" id="dDel">刪除此回覆</button></div>
     <div id="dDelConfirm" hidden class="notice">將刪除${esc(s.name)}的回覆${n?`與 ${n} 個附件`:""}，<span class="overdue">刪除後無法復原。</span>
@@ -822,7 +856,7 @@ function renderAdmin(){
       <div class="meta">各據點會看到自己的路徑，例如桃園站：</div><div class="pathbox" id="pFolderEx"></div>
       <div class="meta">發布時會自動在各據點的資料夾底下建立這個專案資料夾（需用公司電腦的 Edge 或 Chrome）。據點仍在網站上填寫文字回覆；檔案放到共用資料夾後，到「儀表板」按「掃描共用資料夾」即可看到誰還沒放。</div></div>`:""}
     <div class="field"><label>公告附件</label><div id="pFileList">${filesHTML(e?.files||[],true)}</div>
-      <div class="row"><input type="file" id="pFileInput" accept="image/*,application/pdf" multiple hidden><button type="button" class="btn sm" id="pAddFile">＋ 加入檔案</button><span class="meta" id="pUpMsg"></span></div></div>
+      <div class="row"><input type="file" id="pFileInput" accept="${FILE_ACCEPT}" multiple hidden><button type="button" class="btn sm" id="pAddFile">＋ 加入檔案</button><span class="meta" id="pUpMsg"></span></div></div>
     <div class="row"><button type="button" class="btn primary grow" id="pSave">${e&&e.id?"儲存變更":"發布公告"}</button>${e&&e.id?`<button type="button" class="btn" id="pCancel">取消</button>`:""}</div>
   </div>`;
   const list = sortedProjects().map(p=>{
