@@ -105,6 +105,19 @@ textarea{min-height:110px;resize:vertical}
 .sh-row input{min-height:36px;padding:6px 10px;font-family:var(--mono);font-size:13px}
 details>summary{cursor:pointer;font-size:14px;font-weight:500;padding:6px 0}
 code{font-family:var(--mono);font-size:13px;background:var(--bg);padding:1px 5px;border-radius:4px}
+.rich{overflow-x:auto;overflow-wrap:anywhere;line-height:1.6}
+.rich p{margin:0 0 .5em}
+.rich p:last-child,.rich td p,.rich th p{margin:0}
+.rich h1,.rich h2,.rich h3,.rich h4{font-size:16px;font-weight:inherit;margin:.6em 0 .3em}
+.rich ul,.rich ol{margin:.3em 0;padding-left:1.5em}
+.rich table{border-collapse:collapse;margin:8px 0;font-size:14px}
+.rich td,.rich th{border:1px solid var(--pending);padding:6px 10px;text-align:left;font-weight:inherit;vertical-align:middle;overflow-wrap:normal;word-break:normal}
+.rich [style*="background"]{color:#1c2230}
+.rich img{display:block;max-width:100%;height:auto;margin:8px 0;border-radius:6px;cursor:zoom-in;min-width:40px;min-height:40px;background:var(--line)}
+.rich img[src]{min-width:0;min-height:0;background:none}
+.editor{min-height:140px;max-height:70vh;overflow:auto;border:1px solid var(--line);background:var(--bg);border-radius:8px;padding:10px 12px}
+.editor:empty::before{content:attr(data-ph);color:var(--muted)}
+.editor img{cursor:default}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 </style>
 </head>
@@ -292,8 +305,8 @@ function projectFileList(pid){ const p=S.projects.find(x=>x.id===pid); return [.
 function projectStats(pid){ const l=projectFileList(pid); return {count:l.length, bytes:l.reduce((a,f)=>a+(f.size||0),0)}; }
 function referencedIds(){
   const set=new Set(), add=fs=>(fs||[]).forEach(f=>f&&f.id&&set.add(f.id));
-  S.projects.forEach(p=>add(p.files)); Object.values(S.replies).forEach(r=>add(r.files));
-  if(S.editingProject) add(S.editingProject.files); Object.values(S.draft).forEach(d=>add(d.files));
+  S.projects.forEach(p=>{ add(p.files); add(p.bodyFiles); }); Object.values(S.replies).forEach(r=>add(r.files));
+  if(S.editingProject){ add(S.editingProject.files); add(S.editingProject.bodyFiles); } Object.values(S.draft).forEach(d=>add(d.files));
   return set;
 }
 function replyFilesHTML(r){
@@ -561,7 +574,7 @@ function renderProject(){
     <div class="card">
       <div class="row"><div class="grow title" style="font-size:18px">${esc(p.title)}</div>${p.status==="closed"?`<span class="pill closed">已結案</span>`:""}</div>
       <div class="meta" style="margin-top:4px">${p.deadline?`期限 <span class="${isOverdue(p)?"overdue":""}">${esc(p.deadline)}</span> · `:""}發布 ${fmtDate(p.createdAt)} · 對象：${esc(groupsText(p))}</div>
-      <div class="body-text" style="margin-top:10px">${esc(p.body)}</div>
+      ${bodyHTML(p)}
       ${p.files&&p.files.length?`<div style="margin-top:10px">${filesHTML(p.files,false)}</div>`:""}
       ${p.archive&&p.status==="closed"?`<div class="meta" style="margin-top:10px">本專案已於 ${fmtDate(p.archive.at)} 結案，各據點的回覆與附件已存到公司共用資料夾。</div>`:p.filesClearedAt&&!(p.files&&p.files.length)?`<div class="meta" style="margin-top:10px">本專案附件已於 ${fmtDate(p.filesClearedAt)} 清除</div>`:""}
     </div>
@@ -587,6 +600,7 @@ function renderProject(){
       ${statusGridHTML(p.id)}
     </div>`;
   document.getElementById("back").addEventListener("click",()=>{S.projectId=null;render();});
+  hydrateRich(app);
   if(!canReply) return;
   const ta=document.getElementById("replyText"); ta.addEventListener("input",()=>{d.text=ta.value;});
   const fi=document.getElementById("fileInput");
@@ -814,6 +828,7 @@ async function downloadProjectZip(p){
     root.file("公告.txt",`專案名稱：${p.title}\n狀態：${statusTxt}\n回覆期限：${p.deadline||"無"}\n回覆對象：${groupsText(p)}\n據點檔案存放位置：${isShare(p)?"公司共用資料夾（各據點資料夾\\"+shareFolderOf(p)+"）":"雲端（網站上傳）"}\n發布時間：${p.createdAt?new Date(p.createdAt).toLocaleString("zh-TW"):""}\n\n${p.body||""}\n`);
     const addFiles=async(folder,list)=>{ let i=0; for(const f of list){ i++; try{ const {parts}=await fileBytes(f.id); folder.file(`${String(i).padStart(2,"0")}_${safeName(f.name)}`,new Blob(parts)); }catch(e){ folder.file(`${String(i).padStart(2,"0")}_${safeName(f.name)}.讀取失敗.txt`,"此附件已無法讀取"); } tick(); } };
     if(p.files&&p.files.length) await addFiles(root.folder("公告附件"),p.files);
+    if(p.bodyHtml){ try{ root.file("公告（含表格與照片）.html",await richExportBlob(p)); }catch(e){} }
     const sh=isShare(p), shCols = s => sh ? [shareRel(s.code)?shareStatusText(p,s.code):"", sharePath(p,s.code)] : [];
     const rows=[["據點代碼","據點","類別","狀態","回覆時間","回覆內容","附件數",...(sh?["共用資料夾狀況"+(p.shareScan?`（${new Date(p.shareScan.at).toLocaleString("zh-TW")} 掃描）`:""),"共用資料夾路徑"]:[])]];
     const rf=root.folder("各據點回覆");
@@ -834,13 +849,280 @@ async function downloadProjectZip(p){
   S.zipping=null; render();
 }
 
+/* ---------- 公告內容：可貼上表格與照片 ----------
+   公告內容存兩份：body＝純文字（給「公告.txt」、回覆總表等使用，也符合 Firestore 規則的 5000 字上限）；
+   bodyHtml＝含表格、顏色、照片位置的版面。照片跟附件一樣切塊存進 files，清單記在專案的 bodyFiles，
+   版面裡只留 <img data-fid="檔案編號">，顯示時再把照片讀出來。
+   bodyHtml 不論是貼上、存檔或顯示，都先經過 richSanitize：只留下列出的標籤與樣式（文字顏色、底色、粗體、斜體、底線、對齊），
+   其他一律丟掉，所以不會有程式碼或外部連結的圖片混進公告。 */
+const RICH_MAX = 150000;
+const RICH_TAGS = new Set("P,BR,DIV,SPAN,B,STRONG,I,EM,U,S,SUB,SUP,TABLE,THEAD,TBODY,TFOOT,TR,TD,TH,UL,OL,LI,H1,H2,H3,H4,A,IMG".split(","));
+const RICH_DROP = new Set("SCRIPT,STYLE,META,LINK,TITLE,HEAD,BASE,IFRAME,FRAME,OBJECT,EMBED,SVG,MATH,FORM,INPUT,BUTTON,SELECT,TEXTAREA,COLGROUP,COL,CAPTION,NOSCRIPT,TEMPLATE,VIDEO,AUDIO,SOURCE,CANVAS".split(","));
+const RICH_TBL = new Set(["TABLE","THEAD","TBODY","TFOOT","TR"]);
+const RICH_BLOCK = new Set(["P","DIV","TD","TH","LI","H1","H2","H3","H4"]);
+const RICH_COLOR = /^(#[0-9a-f]{3,8}|rgba?\([\d\s.,%\/]+\)|[a-z]{3,20})$/;
+/* 瀏覽器編輯時偶爾會自己補上「目前畫面的文字色／底色」，這些不是使用者設定的顏色，存檔時去掉，深色模式才不會看不到字 */
+const RICH_SKIP_FG = new Set(["rgb(28,34,48)","rgb(232,235,241)"]);
+const RICH_SKIP_BG = new Set(["rgb(255,255,255)","rgb(245,246,248)","rgb(20,24,33)","rgb(29,34,45)","#fff","#ffffff","white","transparent","none","initial","inherit"]);
+function richStyle(v){
+  const out=[];
+  for(const part of String(v||"").split(";")){
+    const i=part.indexOf(":"); if(i<0) continue;
+    let k=part.slice(0,i).trim().toLowerCase();
+    const val=part.slice(i+1).trim().toLowerCase().replace(/\s*!important$/,""), flat=val.replace(/\s+/g,"");
+    if(k==="background") k="background-color";
+    if(k==="color"){ if(RICH_COLOR.test(val) && !RICH_SKIP_FG.has(flat)) out.push("color:"+val); }
+    else if(k==="background-color"){ if(RICH_COLOR.test(val) && !RICH_SKIP_BG.has(flat)) out.push("background-color:"+val); }
+    else if(k==="font-weight"){ if(/^(bold|normal|[1-9]00)$/.test(val)) out.push("font-weight:"+val); }
+    else if(k==="font-style"){ if(/^(italic|normal)$/.test(val)) out.push("font-style:"+val); }
+    else if(k==="text-decoration"||k==="text-decoration-line"){ if(/^(underline|line-through)$/.test(val)) out.push("text-decoration:"+val); }
+    else if(k==="text-align"){ if(/^(left|center|right)$/.test(val)) out.push("text-align:"+val); }
+  }
+  return out.join(";");
+}
+function richSpan(el,n){
+  const c=parseInt(n.getAttribute("colspan"),10), r=parseInt(n.getAttribute("rowspan"),10);
+  if(c>1 && c<=50) el.setAttribute("colspan",c);
+  if(r>1 && r<=200) el.setAttribute("rowspan",r);
+}
+function richLink(el,n){
+  const h=n.getAttribute("href")||"";
+  if(/^https?:\/\//i.test(h)){ el.setAttribute("href",h); el.setAttribute("target","_blank"); el.setAttribute("rel","noopener noreferrer"); }
+}
+/* 把 src 底下的內容，只挑允許的標籤與樣式，重建到 out 裡 */
+function richClean(src,out){
+  for(const n of src.childNodes){
+    if(n.nodeType===3){ if(!(RICH_TBL.has(src.tagName) && !n.nodeValue.trim())) out.appendChild(document.createTextNode(n.nodeValue)); continue; }
+    if(n.nodeType!==1) continue;
+    let tag=String(n.tagName).toUpperCase();
+    if(RICH_DROP.has(tag)) continue;
+    if(tag==="FONT") tag="SPAN";
+    if(tag==="IMG"){
+      const fid=n.getAttribute("data-fid")||"";
+      if(/^[a-z0-9]{6,40}$/.test(fid)){ const im=document.createElement("img"); im.setAttribute("data-fid",fid); im.setAttribute("alt","公告照片"); out.appendChild(im); }
+      continue;
+    }
+    if(!RICH_TAGS.has(tag)){ richClean(n,out); continue; }
+    const st=richStyle(n.getAttribute("style"));
+    if(tag==="SPAN" && !st){ richClean(n,out); continue; }
+    const el=document.createElement(tag.toLowerCase());
+    if(st) el.setAttribute("style",st);
+    if(tag==="TD"||tag==="TH") richSpan(el,n);
+    if(tag==="A") richLink(el,n);
+    richClean(n,el); out.appendChild(el);
+  }
+}
+function richSanitize(html){
+  const doc=new DOMParser().parseFromString("<body>"+String(html||"")+"</body>","text/html");
+  const out=document.createElement("div"); richClean(doc.body,out); return out.innerHTML;
+}
+const plainToRich = t => esc(t).replace(/\r?\n/g,"<br>");
+const richEditorHTML = e => e?.bodyHtml ? richSanitize(e.bodyHtml) : plainToRich(e?.body||"");
+/* 公告內容的顯示：新公告用版面（表格、照片），舊公告照原本的純文字 */
+function bodyHTML(p){
+  return p.bodyHtml ? `<div class="rich" style="margin-top:10px">${richSanitize(p.bodyHtml)}</div>` : `<div class="body-text" style="margin-top:10px">${esc(p.body)}</div>`;
+}
+/* 把版面裡的 <img data-fid> 換成真正的照片 */
+function hydrateRich(root){
+  (root||app).querySelectorAll("img[data-fid]").forEach(async im=>{
+    if(im.getAttribute("src")) return;
+    try{ im.src=await fileURL(im.getAttribute("data-fid"),"image/jpeg"); }
+    catch(e){ im.alt=e?.code==="permission-denied"?"（沒有讀取照片的權限）":"（照片無法讀取）"; }
+  });
+}
+/* 點公告裡的照片：開新分頁看大圖（編輯中不開） */
+app.addEventListener("click",ev=>{
+  const im=ev.target.closest?.(".rich img[data-fid]"); if(!im || im.closest(".editor")) return;
+  const u=im.getAttribute("src"); if(u) window.open(u,"_blank");
+});
+const richPlain = ed => String(ed.innerText||"").replace(/ /g," ").replace(/[ \t]+\n/g,"\n").replace(/\n{3,}/g,"\n\n").trim();
+const richMsg = t => { const el=document.getElementById("pBodyMsg"); if(el) el.textContent=t; };
+function richSync(d){
+  const ed=document.getElementById("pBodyEd"); if(!ed) return;
+  d.body=richPlain(ed);
+  d.bodyHtml = (d.body || ed.querySelector("img,table")) ? ed.innerHTML : "";
+}
+function richRange(ed){
+  const sel=getSelection();
+  if(sel && sel.rangeCount){ const r=sel.getRangeAt(0); if(ed.contains(r.commonAncestorContainer)) return r.cloneRange(); }
+  return null;
+}
+/* 把節點放到游標位置；游標不在編輯區（或畫面剛重畫過）就接在最後面 */
+function richInsert(nodes,range,d){
+  const ed=document.getElementById("pBodyEd");
+  if(!ed || !nodes.length || S.editingProject!==d) return;
+  let r = range && ed.contains(range.commonAncestorContainer) ? range : null;
+  if(!r){ r=document.createRange(); r.selectNodeContents(ed); r.collapse(false); }
+  r.deleteContents();
+  const frag=document.createDocumentFragment(); nodes.forEach(n=>frag.appendChild(n));
+  const last=frag.lastChild; r.insertNode(frag);
+  const tail=ed.lastChild;   // 表格或照片在最後面時，補一個空行，游標才有地方繼續打字
+  if(tail && tail.nodeType===1 && /^(TABLE|IMG)$/.test(tail.tagName)){ const t=document.createElement("div"); t.appendChild(document.createElement("br")); ed.appendChild(t); }
+  try{ const sel=getSelection(), c=document.createRange(); c.setStartAfter(last); c.collapse(true); sel.removeAllRanges(); sel.addRange(c); }catch(e){}
+  hydrateRich(ed); richSync(d);
+}
+async function richUploadImages(files,d){
+  const nodes=[]; let i=0; S.uploading=true;
+  for(const f of files){
+    i++; richMsg(`照片上傳中 ${i}/${files.length}…`);
+    try{
+      const rec=await uploadFile(f); (d.bodyFiles=d.bodyFiles||[]).push(rec);
+      const im=document.createElement("img"); im.setAttribute("data-fid",rec.id); im.setAttribute("alt","公告照片"); nodes.push(im);
+    }catch(e){ toastEl(e?.code==="too_large"?"照片超過 20MB，無法插入":e?.code==="permission-denied"?"沒有上傳權限，請檢查 Firestore 規則":"照片上傳失敗，請再試一次"); }
+  }
+  S.uploading=false; richMsg(""); return nodes;
+}
+const richRGB = c => { const m=String(c||"").match(/[\d.]+/g); return m&&m.length>=3 ? {r:+m[0],g:+m[1],b:+m[2],a:m.length>3?+m[3]:1} : null; };
+/* 把剪貼簿的 HTML 放進看不到、不能執行程式的框架裡，讓瀏覽器算出每一格實際的顏色
+   （Excel、Word 的顏色寫在樣式表裡，不這樣做讀不到） */
+function richFrame(html){
+  return new Promise(res=>{
+    const f=document.createElement("iframe");
+    f.setAttribute("sandbox","allow-same-origin"); f.setAttribute("aria-hidden","true"); f.tabIndex=-1;
+    f.style.cssText="position:fixed;left:-10000px;top:0;width:900px;height:600px;border:0";
+    let done=false; const fin=ok=>{ if(done) return; done=true; if(ok) res(f); else { f.remove(); res(null); } };
+    f.onload=()=>fin(true); setTimeout(()=>fin(false),3000);
+    f.srcdoc=html; document.body.appendChild(f);
+  });
+}
+function richComputed(win,src,out,ctx,d,pend){
+  for(const n of src.childNodes){
+    if(n.nodeType===3){ if(!(RICH_TBL.has(src.tagName) && !n.nodeValue.trim())) out.appendChild(document.createTextNode(n.nodeValue.replace(/[ \t\r\f]*\n[ \t\r\f]*/g," "))); continue; }
+    if(n.nodeType!==1) continue;
+    let tag=String(n.tagName).toUpperCase();
+    if(RICH_DROP.has(tag)) continue;
+    const cs=win.getComputedStyle(n); if(cs.display==="none") continue;
+    if(tag==="IMG"){
+      const fid=n.getAttribute("data-fid"), s=n.getAttribute("src")||"";
+      if(fid && (d.bodyFiles||[]).some(f=>f.id===fid)){ const im=document.createElement("img"); im.setAttribute("data-fid",fid); out.appendChild(im); }
+      else if(/^data:image\//i.test(s) && pend.length<8){ const im=document.createElement("img"); pend.push({im,src:s}); out.appendChild(im); }
+      continue;
+    }
+    const st=[], next={...ctx};
+    const fg=richRGB(cs.color), col = fg && fg.r<70 && fg.g<70 && fg.b<70 ? "rgb(0, 0, 0)" : cs.color;   // 接近黑色的字都當成「一般文字」
+    if(col!==ctx.color){ st.push("color:"+col); next.color=col; }
+    const bg=richRGB(cs.backgroundColor);
+    if(bg && bg.a>0.05 && !(bg.r>250 && bg.g>250 && bg.b>250)) st.push("background-color:"+cs.backgroundColor);
+    const bold=(parseInt(cs.fontWeight,10)||400)>=600;
+    if(bold!==ctx.bold){ st.push("font-weight:"+(bold?"bold":"normal")); next.bold=bold; }
+    const ital=/italic|oblique/.test(cs.fontStyle);
+    if(ital!==ctx.italic){ st.push("font-style:"+(ital?"italic":"normal")); next.italic=ital; }
+    const deco=cs.textDecorationLine||"";
+    if(tag!=="A" && tag!=="U" && tag!=="S"){ if(deco.includes("underline")) st.push("text-decoration:underline"); else if(deco.includes("line-through")) st.push("text-decoration:line-through"); }
+    if(tag==="FONT" || ((tag==="B"||tag==="STRONG") && !bold) || ((tag==="I"||tag==="EM") && !ital)) tag="SPAN";
+    if(!RICH_TAGS.has(tag)) tag = /^(block|list-item|flex|grid|table-caption)$/.test(cs.display) ? "DIV" : "SPAN";
+    if(RICH_BLOCK.has(tag)){ const ta=String(cs.textAlign).replace("-webkit-",""); if(ta==="center"||ta==="right") st.push("text-align:"+ta); }
+    if(tag==="SPAN" && !st.length){ richComputed(win,n,out,next,d,pend); continue; }
+    const el=document.createElement(tag.toLowerCase());
+    if(st.length) el.setAttribute("style",st.join(";"));
+    if(tag==="TD"||tag==="TH") richSpan(el,n);
+    if(tag==="A") richLink(el,n);
+    richComputed(win,n,el,next,d,pend); out.appendChild(el);
+  }
+}
+function richParse(html){
+  const doc=new DOMParser().parseFromString(html,"text/html");
+  doc.querySelectorAll("script,link,meta,base,iframe,frame,object,embed,noscript,template,svg,video,audio,source,form,input").forEach(x=>x.remove());
+  doc.querySelectorAll("img").forEach(im=>{   // 只留貼得上的照片：本公告已上傳的，或內容直接寫在剪貼簿裡的
+    if(im.hasAttribute("data-fid")) im.removeAttribute("src");
+    else if(!/^data:image\/(png|jpe?g|gif|webp|bmp);/i.test(im.getAttribute("src")||"")) im.remove();
+    im.removeAttribute("srcset");
+  });
+  doc.querySelectorAll("style").forEach(s=>{ s.textContent=s.textContent.replace(/@import[^;]*;?/gi,"").replace(/url\([^)]*\)/gi,"none"); });
+  doc.querySelectorAll("[style]").forEach(x=>{ const v=x.getAttribute("style"); if(/url\(/i.test(v)) x.setAttribute("style",v.replace(/url\([^)]*\)/gi,"none")); });
+  doc.querySelectorAll("[background]").forEach(x=>x.removeAttribute("background"));
+  return doc;
+}
+function richHasContent(html){
+  const b=new DOMParser().parseFromString(html,"text/html").body;
+  return !!b.querySelector('table,img[data-fid],img[src^="data:image/"]') || b.textContent.trim().length>0;
+}
+async function richFromClipboard(html,d){
+  const doc=richParse(html), box=document.createElement("div"), pend=[];
+  const frame=await richFrame("<!doctype html>"+doc.documentElement.outerHTML);
+  if(frame){
+    try{ const win=frame.contentWindow; richComputed(win,win.document.body,box,{color:"rgb(0, 0, 0)",bold:false,italic:false},d,pend); }
+    catch(e){ box.textContent=""; pend.length=0; richClean(doc.body,box); }
+    frame.remove();
+  } else richClean(doc.body,box);
+  if(pend.length){
+    S.uploading=true; let i=0;
+    for(const x of pend){
+      i++; richMsg(`照片上傳中 ${i}/${pend.length}…`);
+      try{
+        const blob=await (await fetch(x.src)).blob(), ext=(blob.type.split("/")[1]||"png").replace("jpeg","jpg");
+        const rec=await uploadFile(new File([blob],`貼上圖片${i}.${ext}`,{type:blob.type})); (d.bodyFiles=d.bodyFiles||[]).push(rec);
+        x.im.setAttribute("data-fid",rec.id);
+      }catch(e){ x.im.remove(); }
+    }
+    S.uploading=false;
+  }
+  const t=document.createElement("div"); t.innerHTML=richSanitize(box.innerHTML);
+  const nodes=[...t.childNodes];
+  while(nodes.length && nodes[0].nodeType===3 && !nodes[0].nodeValue.trim()) nodes.shift();
+  while(nodes.length && nodes[nodes.length-1].nodeType===3 && !nodes[nodes.length-1].nodeValue.trim()) nodes.pop();
+  return nodes;
+}
+/* 貼上：有表格或文字的 HTML（Excel、Word、網頁）→ 轉成乾淨的版面；只有圖（截圖、複製的照片）→ 上傳後插入；純文字照瀏覽器原本的方式 */
+async function richPaste(ev,d){
+  const cd=ev.clipboardData; if(!cd) return;
+  const html=cd.getData("text/html")||"", plain=cd.getData("text/plain")||"";
+  const imgs=[...(cd.files||[])].filter(f=>/^image\//.test(f.type));
+  if(!html && !imgs.length) return;
+  ev.preventDefault();
+  if(S.uploading){ toastEl("照片還在上傳中，請稍候再貼"); return; }
+  const range=richRange(ev.currentTarget);
+  let nodes=[];
+  if(html && richHasContent(html)){ richMsg("貼上中…"); try{ nodes=await richFromClipboard(html,d); }catch(e){ nodes=[]; S.uploading=false; } richMsg(""); }
+  else if(imgs.length) nodes=await richUploadImages(imgs,d);
+  if(!nodes.length && plain.trim()) plain.replace(/\r/g,"").split("\n").forEach((line,i)=>{ if(i) nodes.push(document.createElement("br")); if(line) nodes.push(document.createTextNode(line)); });
+  if(!nodes.length){ toastEl("這個內容貼不上。照片請按「插入照片」，或截圖後再貼上"); return; }
+  richInsert(nodes,range,d);
+}
+function bindRichEditor(d){
+  const ed=document.getElementById("pBodyEd"); if(!ed) return;
+  hydrateRich(ed);
+  ed.addEventListener("input",()=>richSync(d));
+  ed.addEventListener("paste",ev=>richPaste(ev,d));
+  const pics = list => [...(list||[])].filter(f=>/^image\//.test(f.type)||IMG_EXT[extOf(f.name)]);
+  ed.addEventListener("dragover",ev=>{ if([...(ev.dataTransfer?.types||[])].includes("Files")) ev.preventDefault(); });
+  ed.addEventListener("drop",async ev=>{
+    if(![...(ev.dataTransfer?.types||[])].includes("Files")) return;
+    ev.preventDefault(); const fs=pics(ev.dataTransfer.files);
+    if(!fs.length){ toastEl("公告內容裡只能放照片，其他檔案請加到下方的「公告附件」"); return; }
+    if(S.uploading){ toastEl("檔案還在上傳中"); return; }
+    richInsert(await richUploadImages(fs,d),null,d);
+  });
+  const fi=document.getElementById("pBodyImg"); let at=null;
+  document.getElementById("pBodyAddImg")?.addEventListener("click",()=>{ at=richRange(ed); fi.click(); });
+  fi?.addEventListener("change",async()=>{
+    const fs=pics(fi.files); fi.value=""; if(!fs.length) return;
+    if(S.uploading){ toastEl("檔案還在上傳中"); return; }
+    const r=at; at=null; richInsert(await richUploadImages(fs,d),r,d);
+  });
+}
+/* 結案／打包下載用：把公告版面存成一個可以直接用瀏覽器打開的網頁檔，照片一起包在裡面 */
+const blobToDataURL = b => new Promise((res,rej)=>{ const fr=new FileReader(); fr.onload=()=>res(fr.result); fr.onerror=()=>rej(fr.error); fr.readAsDataURL(b); });
+async function richExportBlob(p){
+  const box=document.createElement("div"); box.innerHTML=richSanitize(p.bodyHtml);
+  for(const im of [...box.querySelectorAll("img[data-fid]")]){
+    try{ const {parts,type}=await fileBytes(im.getAttribute("data-fid")); im.setAttribute("src",await blobToDataURL(new Blob(parts,{type:type||"image/jpeg"}))); im.removeAttribute("data-fid"); }
+    catch(e){ im.replaceWith(document.createTextNode("（照片無法讀取）")); }
+  }
+  return new Blob([`<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><title>${esc(p.title)}</title><style>body{font-family:"Microsoft JhengHei","PingFang TC",sans-serif;max-width:820px;margin:24px auto;padding:0 16px;line-height:1.6;color:#1c2230}table{border-collapse:collapse;margin:8px 0}td,th{border:1px solid #8a92a3;padding:6px 10px;text-align:left}td p,th p{margin:0}img{max-width:100%;height:auto;display:block;margin:8px 0}</style></head><body><h2>${esc(p.title)}</h2>${box.innerHTML}</body></html>`],{type:"text/html"});
+}
+
 /* ---------- 管理 ---------- */
 function renderAdmin(){
   const e=S.editingProject;
   const form = `<div class="card form">
     <div class="row"><div class="grow title">${e&&e.id?"編輯公告":"新增公告"}</div></div>
     <div class="field"><label for="pTitle">專案名稱</label><input type="text" id="pTitle" placeholder="例：全省消防檢修資料確認" value="${esc(e?.title||"")}"></div>
-    <div class="field"><label for="pBody">公告內容</label><textarea id="pBody" placeholder="說明要各據點確認或回覆的事項">${esc(e?.body||"")}</textarea></div>
+    <div class="field"><label id="pBodyLbl">公告內容</label>
+      <div id="pBodyEd" class="rich editor" contenteditable="true" role="textbox" aria-multiline="true" aria-labelledby="pBodyLbl" data-ph="說明要各據點確認或回覆的事項">${richEditorHTML(e)}</div>
+      <div class="row"><input type="file" id="pBodyImg" accept="image/*" multiple hidden><button type="button" class="btn sm" id="pBodyAddImg">＋ 插入照片</button><span class="meta grow" id="pBodyMsg"></span></div>
+      <div class="meta">可以直接貼上 Excel、Word 的表格（會保留底色與文字顏色），也可以貼上截圖或照片；貼上後仍可修改表格裡的文字。</div>
+    </div>
     <div class="field"><label for="pDeadline">回覆期限（可留空）</label><input type="date" id="pDeadline" value="${esc(e?.deadline||"")}"></div>
     <div class="field"><label>要回覆的單位（可複選）</label>
       <div class="row">${GROUP_KEYS.map(g=>`<label class="opt" style="min-width:140px"><input type="checkbox" name="pGroup" value="${g.k}" ${projGroups(e).includes(g.k)?"checked":""}>${g.label}（${SITES.filter(s=>gkOf(s)===g.k).length} 個）</label>`).join("")}</div>
@@ -898,11 +1180,19 @@ function renderAdmin(){
   document.getElementById("pAddFile").addEventListener("click",()=>fi.click());
   fi.addEventListener("change",()=>handleFiles(fi.files,d,null,"pFileList","pUpMsg","pAddFile"));
   bindRemove(d,"pFileList");
-  ["pTitle","pBody","pDeadline"].forEach(id=>document.getElementById(id).addEventListener("input",ev=>{ d[{pTitle:"title",pBody:"body",pDeadline:"deadline"}[id]]=ev.target.value; }));
+  ["pTitle","pDeadline"].forEach(id=>document.getElementById(id).addEventListener("input",ev=>{ d[{pTitle:"title",pDeadline:"deadline"}[id]]=ev.target.value; }));
+  bindRichEditor(d);
   document.getElementById("pSave").addEventListener("click",async()=>{
     if(S.uploading){toastEl("檔案還在上傳中");return;}
-    const title=document.getElementById("pTitle").value.trim(), body=document.getElementById("pBody").value.trim(), deadline=document.getElementById("pDeadline").value;
+    const title=document.getElementById("pTitle").value.trim(), deadline=document.getElementById("pDeadline").value;
     if(!title){toastEl("請輸入專案名稱");return;}
+    /* 公告內容：body＝純文字版，bodyHtml＝含表格與照片的版面，bodyFiles＝版面裡用到的照片 */
+    const ed=document.getElementById("pBodyEd"), body=richPlain(ed).slice(0,5000);
+    let bodyHtml=richSanitize(ed.innerHTML);
+    if(!body && !/<img/i.test(bodyHtml)) bodyHtml="";
+    if(bodyHtml.length>RICH_MAX){toastEl("公告內容太大（表格太多或太大），請刪減，或改放到公告附件");return;}
+    const fidSet=new Set([...bodyHtml.matchAll(/data-fid="([a-z0-9]+)"/g)].map(m=>m[1]));
+    const bodyAll=[...new Map((d.bodyFiles||[]).map(f=>[f.id,f])).values()], bodyFiles=bodyAll.filter(f=>fidSet.has(f.id)), bodyDrop=bodyAll.filter(f=>!fidSet.has(f.id));
     const storage = d.storage==="share"?"share":"cloud";
     const shareFolder = storage==="share" ? (safeFolder(document.getElementById("pFolder")?.value)||safeFolder(title)) : (d.shareFolder||"");
     if(storage==="share" && !shareFolder){toastEl("請輸入專案資料夾名稱");return;}
@@ -920,9 +1210,10 @@ function renderAdmin(){
     const done = d.id?"已儲存":"已發布";
     let pid=d.id;
     try{
-      if(d.id) await S.db.collection("projects").doc(d.id).update({title,body,deadline,files:d.files,storage,shareFolder,groups});
-      else pid=(await S.db.collection("projects").add({title,body,deadline,files:d.files,storage,shareFolder,groups,status:"open",createdAt:new Date().toISOString()})).id;
+      if(d.id) await S.db.collection("projects").doc(d.id).update({title,body,bodyHtml,bodyFiles,deadline,files:d.files,storage,shareFolder,groups});
+      else pid=(await S.db.collection("projects").add({title,body,bodyHtml,bodyFiles,deadline,files:d.files,storage,shareFolder,groups,status:"open",createdAt:new Date().toISOString()})).id;
       S.editingProject=null; render();
+      bodyDrop.forEach(f=>{ deleteStored(f).catch(()=>{}); });   // 從公告內容拿掉的照片，順便刪掉
     }catch(e){ toastEl("儲存失敗，請再試一次"); btn.disabled=false; return; }
     if(!needMk){ toastEl(done); return; }
     if(!mk){ toastEl(`${done}，但${why}，各據點的資料夾尚未建立。請用公司電腦到「儀表板」點進專案補建。`); return; }
@@ -931,14 +1222,14 @@ function renderAdmin(){
     await scanShare(pid,{create:true});
   });
   document.getElementById("pCancel")?.addEventListener("click",()=>{S.editingProject=null;render();});
-  app.querySelectorAll("[data-edit]").forEach(b=>b.addEventListener("click",()=>{ const p=S.projects.find(x=>x.id===b.dataset.edit); S.editingProject={id:p.id,title:p.title,body:p.body,deadline:p.deadline||"",files:[...(p.files||[])],storage:p.storage||"cloud",shareFolder:p.shareFolder||"",folderTouched:!!p.shareFolder,groups:projGroups(p)}; render(); window.scrollTo({top:0}); }));
+  app.querySelectorAll("[data-edit]").forEach(b=>b.addEventListener("click",()=>{ const p=S.projects.find(x=>x.id===b.dataset.edit); S.editingProject={id:p.id,title:p.title,body:p.body,bodyHtml:p.bodyHtml||"",bodyFiles:[...(p.bodyFiles||[])],deadline:p.deadline||"",files:[...(p.files||[])],storage:p.storage||"cloud",shareFolder:p.shareFolder||"",folderTouched:!!p.shareFolder,groups:projGroups(p)}; render(); window.scrollTo({top:0}); }));
   app.querySelectorAll("[data-arc]").forEach(b=>b.addEventListener("click",()=>{ const p=S.projects.find(x=>x.id===b.dataset.arc); if(p) arcOpen(p); }));
   app.querySelectorAll("[data-toggle]").forEach(b=>b.addEventListener("click",async()=>{ const p=S.projects.find(x=>x.id===b.dataset.toggle);
     if(p.status!=="closed" && canArchive(p)){ arcOpen(p); return; }   // 結案＝先把資料存到共用資料夾
     try{ await S.db.collection("projects").doc(p.id).update({status:p.status==="closed"?"open":"closed"}); }catch(e){toastEl("更新失敗");} }));
   app.querySelectorAll("[data-del]").forEach(b=>b.addEventListener("click",()=>{ document.getElementById("confirm-"+b.dataset.del).hidden=false; }));
   app.querySelectorAll("[data-del-yes]").forEach(b=>b.addEventListener("click",async()=>{ const pid=b.dataset.delYes; b.disabled=true;
-    const files=projectFileList(pid);
+    const files=[...projectFileList(pid), ...(S.projects.find(x=>x.id===pid)?.bodyFiles||[])];
     try{ for(const k of replyKeysOf(pid)) await S.db.collection("replies").doc(k).delete(); await S.db.collection("projects").doc(pid).delete(); }
     catch(e){ toastEl("刪除失敗"); b.disabled=false; return; }
     let left=0; for(const f of files){ try{ await deleteStored(f); }catch(e){ left++; } }
@@ -1074,6 +1365,7 @@ async function archiveProject(pid){
   let pOk=[], pKeep=p.files||[], sumOk=true;
   if(pKeep.length){ try{ const r=await copyFiles(await central.getDirectoryHandle("公告附件",{create:true}),pKeep); pOk=r.ok; pKeep=r.keep; }catch(e){ pKeep.forEach(tick); } }
   left+=pKeep.length;
+  if(p.bodyHtml){ try{ await fsPut(central,"公告（含表格與照片）.html",await richExportBlob(p)); }catch(e){} }
   try{
     await fsPut(central,"公告.txt",txtBlob(`專案名稱：${p.title}\n回覆期限：${p.deadline||"無"}\n發布時間：${when(p.createdAt)}\n結案時間：${when(now)}\n回覆對象：${groupsText(p)}\n回覆：${countReplies(pid)}/${projTotal(p)}\n\n${p.body||""}\n`));
     await fsPut(central,"回覆總表.csv",new Blob(["﻿"+rows.map(r=>r.map(v=>`"${String(v??"").replace(/"/g,'""')}"`).join(",")).join("\r\n")],{type:"text/csv"}));
